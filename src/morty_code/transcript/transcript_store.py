@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from morty_code.types.messages import Message
+from morty_code.types.runtime_state import LoadedTranscript
 
 
 class TranscriptStore:
@@ -58,3 +59,25 @@ class TranscriptStore:
                 "event": event,
             }
             file.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    async def load_session(self) -> LoadedTranscript:
+        messages: list[Message] = []
+        events: list[dict[str, object]] = []
+        last_parent_uuid: str | None = None
+        if not self.path.exists():
+            return LoadedTranscript(messages=[], metadata_events=[], last_parent_uuid=None)
+        for line in self.path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            entry = json.loads(line)
+            if "message" in entry:
+                message = Message(**entry["message"])
+                messages.append(message)
+                last_parent_uuid = message.uuid
+            elif "event" in entry:
+                events.append(entry["event"])
+        return LoadedTranscript(
+            messages=messages,
+            metadata_events=events,
+            last_parent_uuid=last_parent_uuid,
+        )

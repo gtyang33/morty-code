@@ -56,6 +56,8 @@ class ToolUseContext:
     content_replacement_state: ContentReplacementState
     loaded_nested_memory_paths: set[str] = field(default_factory=set)
     discovered_skill_names: set[str] = field(default_factory=set)
+    session_memory_path: str | None = None
+    durable_memory_dir: str | None = None
 
 
 @dataclass
@@ -84,3 +86,12 @@ class ProcessedUserInput:
     effort: str | None = None
     next_input: str | None = None
     submit_next_input: bool = False
+
+
+@dataclass
+class LoadedTranscript:
+    """从 transcript 读取后的统一载体。"""
+
+    messages: list[Message]
+    metadata_events: list[dict[str, Any]]
+    last_parent_uuid: str | None = None

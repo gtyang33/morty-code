@@ -4,6 +4,8 @@ from datetime import datetime
 from uuid import uuid4
 
 from morty_code.attachments.attachment_manager import AttachmentManager
+from morty_code.input.commands import CommandRegistry, CommandSpec
+from morty_code.input.slash_commands import SlashCommandProcessor, parse_slash_command
 from morty_code.types.messages import Message
 from morty_code.types.runtime_state import ProcessedUserInput, QueuedCommand, ToolUseContext
 
@@ -11,8 +13,14 @@ from morty_code.types.runtime_state import ProcessedUserInput, QueuedCommand, To
 class UserInputProcessor:
     """进入 query 前的消息改写层。"""
 
-    def __init__(self, attachment_manager: AttachmentManager) -> None:
+    def __init__(
+        self,
+        attachment_manager: AttachmentManager,
+        command_registry: CommandRegistry | None = None,
+    ) -> None:
         self.attachment_manager = attachment_manager
+        self.command_registry = command_registry or self._build_default_commands()
+        self.slash_processor = SlashCommandProcessor(self.command_registry)
 
     async def process(
         self,
@@ -21,9 +29,16 @@ class UserInputProcessor:
         messages: list[Message],
         skip_attachments: bool = False,
     ) -> ProcessedUserInput:
-        # 这里先只实现常规 prompt 路径。
-        # slash/bridge/keyword rewrite 第二阶段再扩展。
         text = command.value if isinstance(command.value, str) else ""
+        if text.startswith("/") and not command.skip_slash_commands:
+            return await self.slash_processor.process(
+                text,
+                {
+                    "tool_context": context,
+                    "messages": messages,
+                },
+            )
+
         attachments = []
         if text and not skip_attachments:
             attachments = await self.attachment_manager.collect_initial(
@@ -55,3 +70,52 @@ class UserInputProcessor:
             messages=[user_message, *attachment_messages],
             should_query=True,
         )
+
+    def _build_default_commands(self) -> CommandRegistry:
+        registry = CommandRegistry()
+        registry.register(
+            CommandSpec(
+                name="help",
+                description="显示可用命令",
+                kind="local",
+                handler=self._handle_help,
+            )
+        )
+        registry.register(
+            CommandSpec(
+                name="compact",
+                description="请求对话压缩",
+                kind="prompt",
+                handler=self._handle_compact,
+                allowed_tools=[],
+            )
+        )
+        registry.register(
+            CommandSpec(
+                name="memory",
+                description="请求刷新会话记忆",
+                kind="prompt",
+                handler=self._handle_memory,
+                allowed_tools=[],
+            )
+        )
+        return registry
+
+    async def _handle_help(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        names = [command.name for command in self.command_registry.list_user_invocable()]
+        return {
+            "mode": "local",
+            "content": "Available commands: " + ", ".join(sorted(names)),
+        }
+
+    async def _handle_compact(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        return {
+            "mode": "prompt",
+            "content": "Please compact the current conversation and preserve active constraints.",
+        }
+
+    async def _handle_memory(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        return {
+            "mode": "prompt",
+            "content": "Please refresh session memory and surface relevant durable memories for the current task.",
+        }

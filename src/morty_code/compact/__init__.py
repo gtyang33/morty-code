@@ -1,3 +1,5 @@
 from morty_code.compact.auto_compact import AutoCompactDecider
+from morty_code.compact.compact_agent import CompactAgent
+from morty_code.compact.compact_rebuild import rebuild_post_compact_messages
 
-__all__ = ["AutoCompactDecider"]
+__all__ = ["AutoCompactDecider", "CompactAgent", "rebuild_post_compact_messages"]
