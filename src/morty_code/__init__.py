@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import argparse
+import asyncio
 from dataclasses import asdict
+from pathlib import Path
 
 from morty_code.api.model_client import EchoModelClient
 from morty_code.attachments.attachment_manager import AttachmentManager
@@ -20,7 +23,17 @@ from morty_code.types.runtime_state import ContentReplacementState, ToolUseConte
 
 def main() -> None:
     """最小 CLI 入口，用于手动验证 runtime 主链路是否能跑通。"""
-    transcript_store = TranscriptStore.for_session_dir(".morty/sessions")
+
+    parser = argparse.ArgumentParser(prog="morty-code")
+    parser.add_argument("--session", help="恢复指定 JSONL transcript 文件")
+    parser.add_argument("--once", help="只提交一条输入后退出")
+    args = parser.parse_args()
+
+    if args.session:
+        transcript_path = Path(args.session)
+        transcript_store = TranscriptStore(transcript_path, transcript_path.stem)
+    else:
+        transcript_store = TranscriptStore.for_session_dir(".morty/sessions")
     engine = QueryEngine(
         prompt_builder=PromptBuilder(PromptSectionRegistry()),
         input_dispatcher=InputDispatcher(),
@@ -41,9 +54,22 @@ def main() -> None:
         session_memory_path=".morty/session_memory.md",
         durable_memory_dir=".morty/memory",
     )
-    raw = input("morty-code> ").strip()
-    if not raw:
+    if args.session:
+        restored = asyncio.run(engine.restore_from_transcript({"cwd": ".", "model": "echo-model"}))
+        tool_context = restored["tool_context"]
+        print(f"restored {len(restored['messages'])} messages from {args.session}")
+
+    if args.once is not None:
+        for message in engine.submit_message_sync(args.once, tool_context):
+            print(asdict(message))
         return
-    messages = engine.submit_message_sync(raw, tool_context)
-    for message in messages:
-        print(asdict(message))
+
+    while True:
+        raw = input("morty-code> ").strip()
+        if raw in {"/exit", "/quit"}:
+            return
+        if not raw:
+            continue
+        messages = engine.submit_message_sync(raw, tool_context)
+        for message in messages:
+            print(asdict(message))

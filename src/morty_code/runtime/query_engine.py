@@ -4,7 +4,10 @@ import asyncio
 
 from morty_code.compact.auto_compact import AutoCompactDecider
 from morty_code.compact.compact_agent import CompactAgent
-from morty_code.compact.compact_rebuild import rebuild_post_compact_messages
+from morty_code.compact.compact_rebuild import (
+    build_reinjection_attachments,
+    rebuild_post_compact_messages,
+)
 from morty_code.memory.durable_memory import DurableMemoryStore
 from morty_code.memory.memory_extractor import MemoryExtractor
 from morty_code.memory.session_memory import SessionMemoryStore
@@ -60,7 +63,9 @@ class QueryEngine:
 
         new_messages: list[Message] = []
         should_query = False
-        for index, command in enumerate(queued_commands):
+        index = 0
+        while queued_commands:
+            command = queued_commands.pop(0)
             processed = await self.input_processor.process(
                 command=command,
                 context=tool_context,
@@ -70,6 +75,22 @@ class QueryEngine:
             new_messages.extend(processed.messages)
             if index == 0:
                 should_query = processed.should_query
+            if processed.allowed_tools is not None:
+                tool_context.tools = processed.allowed_tools
+            if processed.model is not None:
+                tool_context.model = processed.model
+            if processed.next_input is not None:
+                self.queue_manager.enqueue(
+                    type(command)(
+                        value=processed.next_input,
+                        mode="prompt",
+                        skip_slash_commands=True,
+                        is_meta=True,
+                        origin={"source": "processed_next_input"},
+                    )
+                )
+                queued_commands.extend(self.queue_manager.drain())
+            index += 1
 
         self.messages.extend(new_messages)
         if new_messages:
@@ -77,7 +98,7 @@ class QueryEngine:
         if not should_query:
             return new_messages
 
-        await self._maybe_compact()
+        await self._maybe_compact(tool_context)
         system_prompt, user_context, system_context = await self.prompt_builder.build_for_context(
             tool_context
         )
@@ -113,18 +134,39 @@ class QueryEngine:
             metadata or {"cwd": ".", "model": "echo-model"},
         )
         self.messages = recovered_messages
+        self.transcript_store._last_parent_uuid = loaded.last_parent_uuid
         return restored
 
-    async def _maybe_compact(self) -> None:
+    async def _maybe_compact(self, tool_context: ToolUseContext) -> None:
         approximate_tokens = sum(len(str(message.payload)) for message in self.messages)
         if not self.auto_compact_decider.should_compact(approximate_tokens):
             return
-        summary_messages, messages_to_keep = await self.compact_agent.compact_messages(
-            self.messages
-        )
-        rebuilt = rebuild_post_compact_messages(summary_messages, messages_to_keep)
-        self.messages = rebuilt
-        await self.transcript_store.append_messages(summary_messages)
+        try:
+            summary_messages, messages_to_keep = await self.compact_agent.compact_messages(
+                self.messages
+            )
+            reinjected = build_reinjection_attachments(tool_context)
+            rebuilt = rebuild_post_compact_messages(summary_messages, messages_to_keep, reinjected)
+            self.messages = rebuilt
+            await self.transcript_store.append_messages([*summary_messages, *reinjected])
+            await self.transcript_store.append_event(
+                {
+                    "type": "compact",
+                    "approximate_tokens": approximate_tokens,
+                    "summary_count": len(summary_messages),
+                    "reinjected_count": len(reinjected),
+                }
+            )
+            self.auto_compact_decider.record_success()
+        except Exception as exc:  # noqa: BLE001 - compact 失败不能中断主对话。
+            self.auto_compact_decider.record_failure()
+            await self.transcript_store.append_event(
+                {
+                    "type": "compact_failed",
+                    "approximate_tokens": approximate_tokens,
+                    "error": str(exc),
+                }
+            )
 
     def _write_memories(self, tool_context: ToolUseContext, new_messages: list[Message]) -> None:
         summaries = self.memory_extractor.extract(new_messages)

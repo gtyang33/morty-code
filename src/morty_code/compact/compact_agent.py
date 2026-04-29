@@ -7,7 +7,11 @@ from morty_code.types.messages import Message
 
 
 class CompactAgent:
-    """第一阶段使用规则摘要代替真正的 no-tools agent。"""
+    """规则版 compact agent。
+
+    真实 Claude Code 会用 no-tools 子 agent 做总结；这里先用确定性摘要保持
+    Python MVP 无外部依赖，同时保留 compact boundary 的状态迁移语义。
+    """
 
     async def summarize(self, messages: list[Message]) -> list[Message]:
         kept = []
@@ -23,6 +27,7 @@ class CompactAgent:
                 payload={
                     "subtype": "compact_boundary",
                     "summary": summary,
+                    "source_message_count": len(messages),
                 },
             )
         ]

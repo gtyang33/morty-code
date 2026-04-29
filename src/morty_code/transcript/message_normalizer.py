@@ -21,8 +21,10 @@ class MessageNormalizer:
         available_tools: list[str],
     ) -> list[dict[str, object]]:
         reordered = self._reorder_attachments(messages)
-        filtered = [message for message in reordered if not message.is_virtual]
-        merged = self._merge_adjacent_users(filtered)
+        materialized = [self._materialize_attachment(message) for message in reordered]
+        filtered = [message for message in materialized if not message.is_virtual]
+        paired = self._ensure_tool_pairing(filtered)
+        merged = self._merge_adjacent_users(paired)
         return [
             self._to_api_message(message)
             for message in merged
@@ -87,3 +89,82 @@ class MessageNormalizer:
         if message.type == "user":
             return {"role": "user", "content": message.payload.get("content", "")}
         return {"role": "assistant", "content": message.payload.get("content", [])}
+
+    def _materialize_attachment(self, message: Message) -> Message:
+        if message.type != "attachment":
+            return message
+        attachment_type = str(message.payload.get("attachment_type", "unknown"))
+        content = self._format_attachment_content(message.payload)
+        return Message(
+            uuid=message.uuid,
+            timestamp=message.timestamp,
+            type="user",
+            payload={"content": f"[Attachment: {attachment_type}]\n{content}".strip()},
+            is_meta=message.is_meta,
+            is_virtual=message.is_virtual,
+            origin=message.origin,
+        )
+
+    def _format_attachment_content(self, payload: dict[str, object]) -> str:
+        attachment_type = str(payload.get("attachment_type", "unknown"))
+        if attachment_type == "at_mentioned_file":
+            path = payload.get("path", "")
+            kind = payload.get("kind", "file")
+            content = payload.get("content", "")
+            truncated = "\n[内容已截断]" if payload.get("truncated") else ""
+            return f"path: {path}\nkind: {kind}\n{content}{truncated}".strip()
+        if attachment_type == "relevant_memories":
+            return f"path: {payload.get('path', '')}\n{payload.get('content', '')}".strip()
+        if attachment_type == "queued_command":
+            return f"mode: {payload.get('mode', '')}\nprompt: {payload.get('prompt', '')}".strip()
+        if attachment_type == "command_permissions":
+            return (
+                f"command: {payload.get('command', '')}\n"
+                f"allowed_tools: {payload.get('allowed_tools', [])}"
+            ).strip()
+        if attachment_type == "session_memory":
+            return f"path: {payload.get('path', '')}\n{payload.get('content', '')}".strip()
+        return "\n".join(f"{key}: {value}" for key, value in payload.items())
+
+    def _ensure_tool_pairing(self, messages: list[Message]) -> list[Message]:
+        """去掉没有对应 tool_use 的 tool_result，避免 API 结构错误。"""
+
+        open_tool_use_ids: set[str] = set()
+        output: list[Message] = []
+        for message in messages:
+            if message.type == "assistant":
+                open_tool_use_ids.update(self._tool_use_ids(message.payload.get("content")))
+                output.append(message)
+                continue
+            if message.type == "user":
+                content = message.payload.get("content")
+                result_ids = self._tool_result_ids(content)
+                if result_ids:
+                    valid_ids = result_ids.intersection(open_tool_use_ids)
+                    if not valid_ids:
+                        continue
+                    open_tool_use_ids.difference_update(valid_ids)
+                output.append(message)
+                continue
+            output.append(message)
+        return output
+
+    def _tool_use_ids(self, content: object) -> set[str]:
+        if not isinstance(content, list):
+            return set()
+        return {
+            str(block.get("id"))
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id")
+        }
+
+    def _tool_result_ids(self, content: object) -> set[str]:
+        if not isinstance(content, list):
+            return set()
+        return {
+            str(block.get("tool_use_id"))
+            for block in content
+            if isinstance(block, dict)
+            and block.get("type") == "tool_result"
+            and block.get("tool_use_id")
+        }

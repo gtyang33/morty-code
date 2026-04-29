@@ -29,15 +29,31 @@ class UserInputProcessor:
         messages: list[Message],
         skip_attachments: bool = False,
     ) -> ProcessedUserInput:
+        self.attachment_manager.bind_context(context)
         text = command.value if isinstance(command.value, str) else ""
         if text.startswith("/") and not command.skip_slash_commands:
-            return await self.slash_processor.process(
+            processed = await self.slash_processor.process(
                 text,
                 {
                     "tool_context": context,
                     "messages": messages,
                 },
             )
+            if processed.allowed_tools is not None:
+                processed.messages.append(
+                    Message(
+                        uuid=str(uuid4()),
+                        timestamp=datetime.utcnow().isoformat(),
+                        type="attachment",
+                        payload={
+                            "attachment_type": "command_permissions",
+                            "command": text.split(" ", 1)[0],
+                            "allowed_tools": processed.allowed_tools,
+                        },
+                        is_meta=True,
+                    )
+                )
+            return processed
 
         attachments = []
         if text and not skip_attachments:
@@ -47,11 +63,15 @@ class UserInputProcessor:
                 messages=messages,
             )
 
+        user_content: object = text
+        if command.pasted_contents:
+            user_content = self._build_multimodal_content(text, command.pasted_contents)
+
         user_message = Message(
             uuid=command.uuid or str(uuid4()),
             timestamp=datetime.utcnow().isoformat(),
             type="user",
-            payload={"content": text, "mode": command.mode},
+            payload={"content": user_content, "mode": command.mode},
             is_meta=command.is_meta,
             origin=command.origin,
         )
@@ -70,6 +90,28 @@ class UserInputProcessor:
             messages=[user_message, *attachment_messages],
             should_query=True,
         )
+
+    def _build_multimodal_content(
+        self,
+        text: str,
+        pasted_contents: dict[int, dict[str, object]],
+    ) -> list[dict[str, object]]:
+        """把 pasted image 保留为结构化块，文本 paste 已在 InputDispatcher 展开。"""
+
+        blocks: list[dict[str, object]] = []
+        if text:
+            blocks.append({"type": "text", "text": text})
+        for item in pasted_contents.values():
+            if item.get("type") != "image":
+                continue
+            blocks.append(
+                {
+                    "type": "image",
+                    "source": item.get("source") or item.get("content") or item.get("data"),
+                    "media_type": item.get("media_type", "image/png"),
+                }
+            )
+        return blocks
 
     def _build_default_commands(self) -> CommandRegistry:
         registry = CommandRegistry()

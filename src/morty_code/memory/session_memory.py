@@ -11,8 +11,13 @@ class SessionMemoryStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def append_note(self, note: str) -> None:
+        clean = note.strip()
+        if not clean:
+            return
+        if not self.path.exists():
+            self.path.write_text("# Session Memory\n", encoding="utf-8")
         with self.path.open("a", encoding="utf-8") as file:
-            file.write(note.strip() + "\n")
+            file.write(f"- {clean}\n")
 
     def read(self) -> str:
         if not self.path.exists():

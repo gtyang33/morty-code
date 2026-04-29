@@ -80,7 +80,8 @@ class SlashCommandProcessor:
         return ProcessedUserInput(
             messages=[metadata_message, prompt_message],
             should_query=True,
-            allowed_tools=command.allowed_tools or None,
+            # 空列表表示“显式禁用所有工具”，不能用 `or None` 吞掉。
+            allowed_tools=command.allowed_tools,
             model=command.model,
             effort=command.effort,
         )

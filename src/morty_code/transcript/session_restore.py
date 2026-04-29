@@ -1,30 +1,32 @@
 from __future__ import annotations
 
 from morty_code.types.messages import Message
-from morty_code.types.runtime_state import ContentReplacementState, ToolUseContext
+from morty_code.types.runtime_state import ContentReplacementState, FileViewState, ToolUseContext
 
 
 class SessionRestore:
-    """第一阶段只保留 runtime 恢复接口。"""
+    """从清洗后的 transcript 重建可继续执行的 runtime state。"""
 
     def restore(
         self,
         messages: list[Message],
         metadata: dict[str, object],
     ) -> dict[str, object]:
-        read_file_state: dict[str, object] = {}
+        read_file_state: dict[str, FileViewState] = {}
+        content_replacement_state = ContentReplacementState()
         for message in messages:
             if message.type != "attachment":
+                if message.type == "user":
+                    self._restore_replacements(message, content_replacement_state)
                 continue
-            if message.payload.get("attachment_type") != "at_mentioned_file":
-                continue
-            path = str(message.payload.get("path", ""))
-            if path:
-                read_file_state[path] = {
-                    "path": path,
-                    "content": "",
-                    "is_partial_view": False,
-                }
+            if message.payload.get("attachment_type") == "at_mentioned_file":
+                path = str(message.payload.get("path", ""))
+                if path:
+                    read_file_state[path] = FileViewState(
+                        path=path,
+                        content=str(message.payload.get("content", "")),
+                        is_partial_view=bool(message.payload.get("truncated", False)),
+                    )
         return {
             "messages": messages,
             "metadata": metadata,
@@ -34,6 +36,23 @@ class SessionRestore:
                 permission_mode=str(metadata.get("permission_mode", "default")),
                 app_state={"cwd": metadata.get("cwd", ".")},
                 read_file_state=read_file_state,
-                content_replacement_state=ContentReplacementState(),
+                content_replacement_state=content_replacement_state,
             ),
         }
+
+    def _restore_replacements(
+        self,
+        message: Message,
+        state: ContentReplacementState,
+    ) -> None:
+        content = message.payload.get("content")
+        if not isinstance(content, list):
+            return
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+            tool_use_id = str(block.get("tool_use_id", ""))
+            result_content = block.get("content")
+            if tool_use_id and isinstance(result_content, str) and result_content.startswith("[Tool result "):
+                state.seen_ids.add(tool_use_id)
+                state.replacements[tool_use_id] = result_content

@@ -20,6 +20,7 @@ class TranscriptStore:
         self.path = path
         self.session_id = session_id
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._last_parent_uuid: str | None = None
 
     @classmethod
     def for_session_dir(cls, session_dir: str | Path) -> "TranscriptStore":
@@ -34,7 +35,7 @@ class TranscriptStore:
         is_sidechain: bool = False,
         starting_parent_uuid: str | None = None,
     ) -> str | None:
-        parent_uuid = starting_parent_uuid
+        parent_uuid = starting_parent_uuid if starting_parent_uuid is not None else self._last_parent_uuid
         with self.path.open("a", encoding="utf-8") as file:
             for message in messages:
                 entry = {
@@ -47,6 +48,7 @@ class TranscriptStore:
                 file.write(json.dumps(entry, ensure_ascii=False) + "\n")
                 if message.type in {"user", "assistant", "attachment", "system"}:
                     parent_uuid = message.uuid
+        self._last_parent_uuid = parent_uuid
         return parent_uuid
 
     async def append_event(self, event: dict[str, object]) -> None:
