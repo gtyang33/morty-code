@@ -56,3 +56,23 @@ class SessionRestore:
             if tool_use_id and isinstance(result_content, str) and result_content.startswith("[Tool result "):
                 state.seen_ids.add(tool_use_id)
                 state.replacements[tool_use_id] = result_content
+
+    def restore_content_replacement_events(
+        self,
+        events: list[dict[str, object]],
+        state: ContentReplacementState,
+    ) -> None:
+        for event in events:
+            if event.get("type") != "content-replacement":
+                continue
+            replacements = event.get("replacements")
+            if not isinstance(replacements, list):
+                continue
+            for record in replacements:
+                if not isinstance(record, dict) or record.get("kind") != "tool-result":
+                    continue
+                tool_use_id = str(record.get("tool_use_id", ""))
+                replacement = record.get("replacement")
+                if tool_use_id and isinstance(replacement, str):
+                    state.seen_ids.add(tool_use_id)
+                    state.replacements[tool_use_id] = replacement

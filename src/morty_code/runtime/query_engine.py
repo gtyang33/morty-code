@@ -130,6 +130,8 @@ class QueryEngine:
             tool_context=tool_context,
         )
         self.messages.extend(result.new_messages)
+        for event in result.metadata_events:
+            await self.transcript_store.append_event(event)
         if result.new_messages:
             await self.transcript_store.append_messages(result.new_messages)
             self._write_memories(tool_context, result.new_messages)
@@ -158,6 +160,10 @@ class QueryEngine:
         restored = self.session_restore.restore(
             recovered_messages,
             metadata or {"cwd": ".", "model": "echo-model"},
+        )
+        self.session_restore.restore_content_replacement_events(
+            loaded.metadata_events,
+            restored["tool_context"].content_replacement_state,
         )
         self.messages = recovered_messages
         self.transcript_store._last_parent_uuid = loaded.last_parent_uuid
