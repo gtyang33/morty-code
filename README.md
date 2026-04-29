@@ -42,3 +42,4 @@ uv run morty-code --enable-local-tools
 - 多模态输入会过滤无效 image block，并在 OpenAI-compatible provider 中转换为 `image_url`
 - transcript metadata 会记录 `turn_start` / `turn_finish` 事件
 - tool_result aggregate budget 会把超预算结果落盘为 `.morty/tool-results/<tool_use_id>.txt`，并记录 `content-replacement` metadata
+- normalizer 会清理 `tool_reference`、smoosh `<system-reminder>` sibling，并修复 tool_use/tool_result pairing
