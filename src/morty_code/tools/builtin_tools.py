@@ -48,11 +48,31 @@ def create_local_tool_registry(
                 name="read_file",
                 description="Read a UTF-8 text file under the current workspace root.",
                 handler=read_file,
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Relative path under the workspace root.",
+                        }
+                    },
+                    "required": ["path"],
+                },
             ),
             ToolSpec(
                 name="list_dir",
                 description="List files and directories under the current workspace root.",
                 handler=list_dir,
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Relative directory path under the workspace root.",
+                            "default": ".",
+                        }
+                    },
+                },
             ),
         ]
     )

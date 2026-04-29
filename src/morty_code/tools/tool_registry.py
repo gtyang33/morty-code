@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Any
 
 
 ToolHandler = Callable[[dict[str, object]], Awaitable[dict[str, object]]]
@@ -12,6 +12,7 @@ class ToolSpec:
     name: str
     description: str
     handler: ToolHandler
+    input_schema: dict[str, Any] | None = None
 
 
 class ToolRegistry:
@@ -26,3 +27,22 @@ class ToolRegistry:
 
     def list_names(self) -> list[str]:
         return [tool.name for tool in self._tools]
+
+    def api_tool_schemas(self) -> list[dict[str, object]]:
+        """渲染 OpenAI-compatible tools schema。"""
+
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.input_schema
+                    or {
+                        "type": "object",
+                        "properties": {},
+                    },
+                },
+            }
+            for tool in self._tools
+        ]

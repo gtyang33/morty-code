@@ -83,4 +83,12 @@ class PromptBuilder:
             system_context["discovered_skills"] = ", ".join(
                 sorted(context.discovered_skill_names)
             )
+        tool_schemas = context.app_state.get("tool_schemas")
+        if tool_schemas:
+            import json
+
+            system_context["tool_schemas_json"] = json.dumps(
+                tool_schemas,
+                ensure_ascii=False,
+            )
         return system_prompt, user_context, system_context

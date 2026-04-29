@@ -59,7 +59,10 @@ def main() -> None:
         tools=tool_registry.list_names() if tool_registry is not None else [],
         model=args.model,
         permission_mode="default",
-        app_state={"cwd": "."},
+        app_state={
+            "cwd": ".",
+            "tool_schemas": tool_registry.api_tool_schemas() if tool_registry is not None else [],
+        },
         read_file_state={},
         content_replacement_state=ContentReplacementState(),
         session_memory_path=".morty/session_memory.md",
