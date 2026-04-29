@@ -22,10 +22,7 @@ class ModelClient(Protocol):
 
 
 class EchoModelClient:
-    """最小模型客户端。
-
-    第一阶段先用 echo 语义把主链路跑通，后面再替换真实 provider。
-    """
+    """本地 echo provider，用于无网络验证 runtime 主链路。"""
 
     async def respond(
         self,

@@ -34,5 +34,5 @@ class CompactAgent:
 
     async def compact_messages(self, messages: list[Message]) -> tuple[list[Message], list[Message]]:
         summary_messages = await self.summarize(messages)
-        # 第一阶段保留尾部最近消息，模拟 compact 后的 retained tail。
+        # 保留尾部最近消息，作为 compact 后可继续执行的 retained tail。
         return summary_messages, messages[-8:]

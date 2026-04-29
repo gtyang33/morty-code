@@ -14,9 +14,9 @@ class QueryLoopResult:
 
 
 class QueryLoop:
-    """最小 query while-loop。
+    """模型采样、工具执行和 post-iteration attachment 的主循环。
 
-    第一阶段只实现：
+    当前职责：
     - normalize
     - model sampling
     - tool runner 回灌

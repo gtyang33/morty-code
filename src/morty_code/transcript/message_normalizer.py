@@ -8,7 +8,7 @@ from morty_code.types.messages import Message
 class MessageNormalizer:
     """API 发送前的消息规范化流水线。
 
-    第一阶段先保留最关键的几步：
+    当前保留最关键的几步：
     1. attachment 冒泡
     2. strip virtual
     3. merge adjacent user

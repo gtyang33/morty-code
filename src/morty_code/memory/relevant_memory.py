@@ -6,7 +6,7 @@ from morty_code.types.messages import Attachment
 
 
 class RelevantMemoryFinder:
-    """第一阶段使用轻量规则而不是复杂检索。"""
+    """带预算控制的轻量 relevant memory 检索。"""
 
     def __init__(
         self,

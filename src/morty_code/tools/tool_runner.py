@@ -9,7 +9,7 @@ from morty_code.types.runtime_state import ToolUseContext
 
 
 class NullToolRunner:
-    """第一阶段空工具执行器。"""
+    """不启用工具时使用的空工具执行器。"""
 
     async def run(
         self,
@@ -110,7 +110,7 @@ class ToolRunner:
             f"[Tool result {tool_use_id} was {len(serialized)} chars and was "
             "replaced to keep prompt size stable.]"
         )
-        # 只记录一次替换决策，后续 resume/fork 可以复用相同 placeholder。
+        # 只记录一次替换决策，resume/fork 可以复用相同 placeholder。
         context.content_replacement_state.seen_ids.add(tool_use_id)
         context.content_replacement_state.replacements[tool_use_id] = replacement
         return replacement
