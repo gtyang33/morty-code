@@ -66,4 +66,62 @@ def build_reinjection_attachments(context: ToolUseContext) -> list[Message]:
                     is_meta=True,
                 )
             )
+    if context.app_state.get("plan_mode"):
+        attachments.append(
+            Message(
+                uuid=str(uuid4()),
+                timestamp=now,
+                type="attachment",
+                payload={
+                    "attachment_type": "plan_mode",
+                    "content": "Plan mode is active after compaction. Do not modify files until the plan is approved.",
+                    "source": "post_compact_reinject",
+                },
+                is_meta=True,
+            )
+        )
+    if context.discovered_skill_names:
+        attachments.append(
+            Message(
+                uuid=str(uuid4()),
+                timestamp=now,
+                type="attachment",
+                payload={
+                    "attachment_type": "skill_discovery",
+                    "skills": sorted(context.discovered_skill_names),
+                    "source": "post_compact_reinject",
+                },
+                is_meta=True,
+            )
+        )
+    tool_schemas = context.app_state.get("tool_schemas")
+    if tool_schemas:
+        attachments.append(
+            Message(
+                uuid=str(uuid4()),
+                timestamp=now,
+                type="attachment",
+                payload={
+                    "attachment_type": "command_permissions",
+                    "allowed_tools": context.tools,
+                    "tool_schema_count": len(tool_schemas) if isinstance(tool_schemas, list) else 0,
+                    "source": "post_compact_reinject",
+                },
+                is_meta=True,
+            )
+        )
+    if context.content_replacement_state.replacements:
+        attachments.append(
+            Message(
+                uuid=str(uuid4()),
+                timestamp=now,
+                type="attachment",
+                payload={
+                    "attachment_type": "content_replacement_state",
+                    "replacement_ids": sorted(context.content_replacement_state.replacements),
+                    "source": "post_compact_reinject",
+                },
+                is_meta=True,
+            )
+        )
     return attachments

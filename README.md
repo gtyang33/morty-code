@@ -43,3 +43,4 @@ uv run morty-code --enable-local-tools
 - transcript metadata 会记录 `turn_start` / `turn_finish` 事件
 - tool_result aggregate budget 会把超预算结果落盘为 `.morty/tool-results/<tool_use_id>.txt`，并记录 `content-replacement` metadata
 - normalizer 会清理 `tool_reference`、smoosh `<system-reminder>` sibling，并修复 tool_use/tool_result pairing
+- compact 会写入 system boundary + user summary，query 前只取最后一个 compact boundary 之后的上下文

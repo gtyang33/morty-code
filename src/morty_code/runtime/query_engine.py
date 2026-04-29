@@ -116,16 +116,17 @@ class QueryEngine:
             return new_messages
 
         await self._maybe_compact(tool_context)
+        messages_for_query = self._messages_after_compact_boundary()
         system_prompt, user_context, system_context = await self.prompt_builder.build_for_context(
             tool_context
         )
         result = await self.query_loop.run(
-            messages=self.messages,
+            messages=messages_for_query,
             cache_safe=CacheSafeParams(
                 system_prompt=system_prompt,
                 user_context=user_context,
                 system_context=system_context,
-                messages=list(self.messages),
+                messages=list(messages_for_query),
             ),
             tool_context=tool_context,
         )
@@ -212,3 +213,10 @@ class QueryEngine:
             durable_store = DurableMemoryStore(tool_context.durable_memory_dir)
             for summary in summaries:
                 durable_store.append_summary(summary)
+
+    def _messages_after_compact_boundary(self) -> list[Message]:
+        for index in range(len(self.messages) - 1, -1, -1):
+            message = self.messages[index]
+            if message.type == "system" and message.payload.get("subtype") == "compact_boundary":
+                return self.messages[index:]
+        return self.messages
