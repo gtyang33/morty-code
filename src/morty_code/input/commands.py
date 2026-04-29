@@ -24,7 +24,7 @@ class CommandSpec:
 
 
 class CommandRegistry:
-    """第一阶段的轻量命令注册表。"""
+    """轻量命令注册表。"""
 
     def __init__(self, commands: list[CommandSpec] | None = None) -> None:
         self._commands = commands or []

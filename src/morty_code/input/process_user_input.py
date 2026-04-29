@@ -6,6 +6,7 @@ from uuid import uuid4
 from morty_code.attachments.attachment_manager import AttachmentManager
 from morty_code.input.commands import CommandRegistry, CommandSpec
 from morty_code.input.slash_commands import SlashCommandProcessor, parse_slash_command
+from morty_code.memory.durable_memory import DurableMemoryStore
 from morty_code.types.messages import Message
 from morty_code.types.runtime_state import ProcessedUserInput, QueuedCommand, ToolUseContext
 
@@ -125,6 +126,30 @@ class UserInputProcessor:
         )
         registry.register(
             CommandSpec(
+                name="status",
+                description="显示当前 runtime 状态",
+                kind="local",
+                handler=self._handle_status,
+            )
+        )
+        registry.register(
+            CommandSpec(
+                name="tools",
+                description="显示当前允许的工具",
+                kind="local",
+                handler=self._handle_tools,
+            )
+        )
+        registry.register(
+            CommandSpec(
+                name="memory-index",
+                description="显示 durable memory 索引",
+                kind="local",
+                handler=self._handle_memory_index,
+            )
+        )
+        registry.register(
+            CommandSpec(
                 name="compact",
                 description="请求对话压缩",
                 kind="prompt",
@@ -144,11 +169,68 @@ class UserInputProcessor:
         return registry
 
     async def _handle_help(self, args: str, context: dict[str, object]) -> dict[str, object]:
-        names = [command.name for command in self.command_registry.list_user_invocable()]
+        commands = sorted(
+            self.command_registry.list_user_invocable(),
+            key=lambda command: command.name,
+        )
         return {
             "mode": "local",
-            "content": "Available commands: " + ", ".join(sorted(names)),
+            "content": "\n".join(
+                f"/{command.name} - {command.description}" for command in commands
+            ),
         }
+
+    async def _handle_status(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        tool_context = context["tool_context"]
+        messages = context["messages"]
+        if not isinstance(tool_context, ToolUseContext) or not isinstance(messages, list):
+            return {"mode": "local", "content": "Runtime status unavailable."}
+        approximate_tokens = sum(len(str(message.payload)) for message in messages)
+        return {
+            "mode": "local",
+            "content": "\n".join(
+                [
+                    f"model: {tool_context.model}",
+                    f"permission_mode: {tool_context.permission_mode}",
+                    f"messages: {len(messages)}",
+                    f"approximate_prompt_chars: {approximate_tokens}",
+                    f"tools: {', '.join(tool_context.tools) if tool_context.tools else 'none'}",
+                    f"read_file_state: {len(tool_context.read_file_state)}",
+                    f"session_memory_path: {tool_context.session_memory_path or 'none'}",
+                    f"durable_memory_dir: {tool_context.durable_memory_dir or 'none'}",
+                ]
+            ),
+        }
+
+    async def _handle_tools(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        tool_context = context["tool_context"]
+        if not isinstance(tool_context, ToolUseContext):
+            return {"mode": "local", "content": "Tool context unavailable."}
+        if not tool_context.tools:
+            return {"mode": "local", "content": "No tools are currently allowed."}
+        schemas = tool_context.app_state.get("tool_schemas") or []
+        descriptions: dict[str, str] = {}
+        if isinstance(schemas, list):
+            for schema in schemas:
+                if not isinstance(schema, dict):
+                    continue
+                function = schema.get("function")
+                if isinstance(function, dict):
+                    descriptions[str(function.get("name", ""))] = str(function.get("description", ""))
+        return {
+            "mode": "local",
+            "content": "\n".join(
+                f"- {tool}: {descriptions.get(tool, '')}".rstrip()
+                for tool in tool_context.tools
+            ),
+        }
+
+    async def _handle_memory_index(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        tool_context = context["tool_context"]
+        if not isinstance(tool_context, ToolUseContext) or not tool_context.durable_memory_dir:
+            return {"mode": "local", "content": "No durable memory directory configured."}
+        index = DurableMemoryStore(tool_context.durable_memory_dir).read_index()
+        return {"mode": "local", "content": index.strip() or "Memory index is empty."}
 
     async def _handle_compact(self, args: str, context: dict[str, object]) -> dict[str, object]:
         return {

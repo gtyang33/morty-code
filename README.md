@@ -37,3 +37,4 @@ uv run morty-code --enable-local-tools
 - transcript 主链和 sidechain parent 分离，恢复默认只加载主链
 - cwd 内只读本地工具：`read_file`、`list_dir`
 - OpenAI-compatible provider 会发送本地工具 schema，并把 `tool_calls` 转成内部 `tool_use`
+- 本地 slash command：`/status`、`/tools`、`/memory-index`
