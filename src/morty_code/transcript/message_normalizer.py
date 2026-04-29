@@ -15,6 +15,9 @@ class MessageNormalizer:
     4. transcript message -> API payload
     """
 
+    def __init__(self, max_images: int = 20) -> None:
+        self.max_images = max_images
+
     def normalize_for_api(
         self,
         messages: list[Message],
@@ -93,6 +96,8 @@ class MessageNormalizer:
         return {"role": "assistant", "content": message.payload.get("content", [])}
 
     def _normalize_message_content(self, message: Message) -> Message:
+        if message.type == "user":
+            return self._normalize_user_content(message)
         if message.type != "assistant":
             return message
         content = message.payload.get("content")
@@ -112,6 +117,30 @@ class MessageNormalizer:
                     continue
                 blocks.append(block)
             normalized.payload = {"content": blocks}
+        return normalized
+
+    def _normalize_user_content(self, message: Message) -> Message:
+        content = message.payload.get("content")
+        if not isinstance(content, list):
+            return message
+        image_count = 0
+        blocks: list[dict[str, object]] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            block_type = block.get("type")
+            if block_type == "text" and str(block.get("text", "")).strip():
+                blocks.append(block)
+            elif block_type == "image":
+                source = block.get("source")
+                if not source or image_count >= self.max_images:
+                    continue
+                image_count += 1
+                blocks.append(block)
+            elif block_type == "tool_result":
+                blocks.append(block)
+        normalized = deepcopy(message)
+        normalized.payload = {"content": blocks}
         return normalized
 
     def _has_api_visible_content(self, message: Message) -> bool:

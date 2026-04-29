@@ -218,7 +218,10 @@ class OpenAICompatibleModelClient:
                     )
                 continue
             if isinstance(content, list):
-                normalized.append({**message, "content": self._stringify_content_blocks(content)})
+                if role == "user":
+                    normalized.append({**message, "content": self._to_openai_user_parts(content)})
+                else:
+                    normalized.append({**message, "content": self._stringify_content_blocks(content)})
                 continue
             normalized.append(message)
         return normalized
@@ -242,6 +245,23 @@ class OpenAICompatibleModelClient:
             else:
                 parts.append(json.dumps(block, ensure_ascii=False))
         return "\n".join(part for part in parts if part).strip()
+
+    def _to_openai_user_parts(self, content: list[object]) -> list[dict[str, object]]:
+        parts: list[dict[str, object]] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text":
+                text = str(block.get("text", ""))
+                if text:
+                    parts.append({"type": "text", "text": text})
+            elif block.get("type") == "image":
+                source = block.get("source")
+                if isinstance(source, str) and source:
+                    parts.append({"type": "image_url", "image_url": {"url": source}})
+        if not parts:
+            return [{"type": "text", "text": ""}]
+        return parts
 
     def _render_system_message(
         self,

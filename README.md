@@ -39,3 +39,4 @@ uv run morty-code --enable-local-tools
 - OpenAI-compatible provider 会发送本地工具 schema，并把 `tool_calls` 转成内部 `tool_use`
 - 本地 slash command：`/status`、`/tools`、`/memory-index`
 - 增量附件：`date_change`、`plan_mode`、`plan_mode_exit`、`hook_additional_context`
+- 多模态输入会过滤无效 image block，并在 OpenAI-compatible provider 中转换为 `image_url`
