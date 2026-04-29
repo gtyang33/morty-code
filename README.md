@@ -9,6 +9,7 @@ uv run morty-code
 uv run morty-code --once "读取 @README.md 并总结"
 uv run morty-code --session .morty/sessions/<session-id>.jsonl
 uv run morty-code --provider openai-compatible --model gpt-4.1-mini --once "hello"
+uv run morty-code --enable-local-tools
 ```
 
 项目使用 `pyproject.toml` + `uv.lock` 管理环境，不需要 `pip install -r requirements.txt`。
@@ -34,3 +35,4 @@ uv run morty-code --provider openai-compatible --model gpt-4.1-mini --once "hell
 - capability/skill discovery registry 基础结构
 - OpenAI-compatible provider 基础实现，无额外 Python 依赖
 - transcript 主链和 sidechain parent 分离，恢复默认只加载主链
+- cwd 内只读本地工具：`read_file`、`list_dir`

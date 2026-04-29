@@ -16,7 +16,7 @@ from morty_code.prompt.prompt_builder import PromptBuilder
 from morty_code.prompt.prompt_sections import PromptSectionRegistry
 from morty_code.runtime.query_engine import QueryEngine
 from morty_code.runtime.query_loop import QueryLoop
-from morty_code.tools.tool_runner import NullToolRunner
+from morty_code.tools import NullToolRunner, ToolRunner, create_local_tool_registry
 from morty_code.transcript.transcript_store import TranscriptStore
 from morty_code.types.runtime_state import ContentReplacementState, ToolUseContext
 
@@ -30,6 +30,7 @@ def main() -> None:
     parser.add_argument("--provider", choices=["echo", "openai-compatible"], default="echo")
     parser.add_argument("--model", default="echo-model")
     parser.add_argument("--base-url", help="OpenAI-compatible base URL，默认读取 OPENAI_BASE_URL")
+    parser.add_argument("--enable-local-tools", action="store_true", help="启用 cwd 内只读本地工具")
     args = parser.parse_args()
 
     if args.session:
@@ -42,18 +43,20 @@ def main() -> None:
         if args.provider == "openai-compatible"
         else EchoModelClient()
     )
+    tool_registry = create_local_tool_registry(".") if args.enable_local_tools else None
+    tool_runner = ToolRunner(tool_registry) if tool_registry is not None else NullToolRunner()
     engine = QueryEngine(
         prompt_builder=PromptBuilder(PromptSectionRegistry()),
         input_dispatcher=InputDispatcher(),
         input_processor=UserInputProcessor(AttachmentManager()),
-        query_loop=QueryLoop(model_client, NullToolRunner()),
+        query_loop=QueryLoop(model_client, tool_runner),
         transcript_store=transcript_store,
         auto_compact_decider=AutoCompactDecider(token_threshold=4000),
         compact_agent=CompactAgent(),
         memory_extractor=MemoryExtractor(),
     )
     tool_context = ToolUseContext(
-        tools=[],
+        tools=tool_registry.list_names() if tool_registry is not None else [],
         model=args.model,
         permission_mode="default",
         app_state={"cwd": "."},
