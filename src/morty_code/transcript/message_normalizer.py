@@ -23,7 +23,9 @@ class MessageNormalizer:
         reordered = self._reorder_attachments(messages)
         materialized = [self._materialize_attachment(message) for message in reordered]
         filtered = [message for message in materialized if not message.is_virtual]
-        paired = self._ensure_tool_pairing(filtered)
+        normalized = [self._normalize_message_content(message) for message in filtered]
+        non_empty = [message for message in normalized if self._has_api_visible_content(message)]
+        paired = self._ensure_tool_pairing(non_empty)
         merged = self._merge_adjacent_users(paired)
         return [
             self._to_api_message(message)
@@ -89,6 +91,52 @@ class MessageNormalizer:
         if message.type == "user":
             return {"role": "user", "content": message.payload.get("content", "")}
         return {"role": "assistant", "content": message.payload.get("content", [])}
+
+    def _normalize_message_content(self, message: Message) -> Message:
+        if message.type != "assistant":
+            return message
+        content = message.payload.get("content")
+        normalized = deepcopy(message)
+        if isinstance(content, str):
+            normalized.payload = {"content": [{"type": "text", "text": content}]}
+            return normalized
+        if isinstance(content, list):
+            blocks: list[object] = []
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                # thinking block 不能孤立发送给普通 API，恢复/normalize 时过滤掉。
+                if block.get("type") == "thinking":
+                    continue
+                if block.get("type") == "text" and not str(block.get("text", "")).strip():
+                    continue
+                blocks.append(block)
+            normalized.payload = {"content": blocks}
+        return normalized
+
+    def _has_api_visible_content(self, message: Message) -> bool:
+        if message.type == "assistant":
+            content = message.payload.get("content")
+            if isinstance(content, str):
+                return bool(content.strip())
+            if isinstance(content, list):
+                return any(
+                    isinstance(block, dict)
+                    and (
+                        block.get("type") == "tool_use"
+                        or (block.get("type") == "text" and str(block.get("text", "")).strip())
+                    )
+                    for block in content
+                )
+            return False
+        if message.type == "user":
+            content = message.payload.get("content")
+            if isinstance(content, str):
+                return bool(content.strip())
+            if isinstance(content, list):
+                return bool(content)
+            return content is not None
+        return True
 
     def _materialize_attachment(self, message: Message) -> Message:
         if message.type != "attachment":

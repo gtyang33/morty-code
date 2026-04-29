@@ -27,3 +27,6 @@ uv run morty-code --session .morty/sessions/<session-id>.jsonl
 - compact 后重新注入已读文件视图和 session memory
 - resume/recovery 时清理孤儿 tool_result 与空 assistant 消息
 - 大 tool_result 稳定替换，避免长会话 prompt 膨胀
+- PromptBuilder 会把 durable memory index 与 session memory 注入 user_context
+- forked agent 支持 sidechain transcript 落盘
+- capability/skill discovery registry 基础结构

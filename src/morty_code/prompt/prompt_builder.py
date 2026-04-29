@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+from morty_code.memory.durable_memory import DurableMemoryStore
 from morty_code.prompt.prompt_sections import PromptSectionRegistry, SystemPromptSection
 from morty_code.types.runtime_state import ToolUseContext
 
@@ -60,4 +61,26 @@ class PromptBuilder:
         self,
         context: ToolUseContext,
     ) -> tuple[list[str], dict[str, str], dict[str, str]]:
-        return await self.build(context.tools, context.model, context.app_state)
+        system_prompt, user_context, system_context = await self.build(
+            context.tools,
+            context.model,
+            context.app_state,
+        )
+        # durable/session memory 放在 user_context，不改写 cache-safe system prompt 主体。
+        if context.durable_memory_dir:
+            store = DurableMemoryStore(context.durable_memory_dir)
+            index = store.read_index()[:12000]
+            if index.strip():
+                user_context["durable_memory_index"] = index
+        if context.session_memory_path:
+            session_path = Path(context.session_memory_path)
+            if session_path.exists():
+                user_context["session_memory"] = session_path.read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )[:12000]
+        if context.discovered_skill_names:
+            system_context["discovered_skills"] = ", ".join(
+                sorted(context.discovered_skill_names)
+            )
+        return system_prompt, user_context, system_context
