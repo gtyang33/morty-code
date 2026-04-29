@@ -5,7 +5,7 @@ import asyncio
 from dataclasses import asdict
 from pathlib import Path
 
-from morty_code.api.model_client import EchoModelClient
+from morty_code.api.model_client import EchoModelClient, OpenAICompatibleModelClient
 from morty_code.attachments.attachment_manager import AttachmentManager
 from morty_code.compact.auto_compact import AutoCompactDecider
 from morty_code.compact.compact_agent import CompactAgent
@@ -27,6 +27,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="morty-code")
     parser.add_argument("--session", help="恢复指定 JSONL transcript 文件")
     parser.add_argument("--once", help="只提交一条输入后退出")
+    parser.add_argument("--provider", choices=["echo", "openai-compatible"], default="echo")
+    parser.add_argument("--model", default="echo-model")
+    parser.add_argument("--base-url", help="OpenAI-compatible base URL，默认读取 OPENAI_BASE_URL")
     args = parser.parse_args()
 
     if args.session:
@@ -34,11 +37,16 @@ def main() -> None:
         transcript_store = TranscriptStore(transcript_path, transcript_path.stem)
     else:
         transcript_store = TranscriptStore.for_session_dir(".morty/sessions")
+    model_client = (
+        OpenAICompatibleModelClient(model=args.model, base_url=args.base_url)
+        if args.provider == "openai-compatible"
+        else EchoModelClient()
+    )
     engine = QueryEngine(
         prompt_builder=PromptBuilder(PromptSectionRegistry()),
         input_dispatcher=InputDispatcher(),
         input_processor=UserInputProcessor(AttachmentManager()),
-        query_loop=QueryLoop(EchoModelClient(), NullToolRunner()),
+        query_loop=QueryLoop(model_client, NullToolRunner()),
         transcript_store=transcript_store,
         auto_compact_decider=AutoCompactDecider(token_threshold=4000),
         compact_agent=CompactAgent(),
@@ -46,7 +54,7 @@ def main() -> None:
     )
     tool_context = ToolUseContext(
         tools=[],
-        model="echo-model",
+        model=args.model,
         permission_mode="default",
         app_state={"cwd": "."},
         read_file_state={},
@@ -55,7 +63,7 @@ def main() -> None:
         durable_memory_dir=".morty/memory",
     )
     if args.session:
-        restored = asyncio.run(engine.restore_from_transcript({"cwd": ".", "model": "echo-model"}))
+        restored = asyncio.run(engine.restore_from_transcript({"cwd": ".", "model": args.model}))
         tool_context = restored["tool_context"]
         print(f"restored {len(restored['messages'])} messages from {args.session}")
 

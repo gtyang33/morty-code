@@ -10,17 +10,14 @@ from morty_code.types.runtime_state import LoadedTranscript
 
 
 class TranscriptStore:
-    """append-only transcript 存储。
-
-    第一阶段先实现主链消息落盘。
-    第二阶段再补 metadata events、load/rebuild、sidechain。
-    """
+    """append-only transcript 存储，主链和 sidechain parent 分开维护。"""
 
     def __init__(self, path: Path, session_id: str) -> None:
         self.path = path
         self.session_id = session_id
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._last_parent_uuid: str | None = None
+        self._last_sidechain_parent_uuid: str | None = None
 
     @classmethod
     def for_session_dir(cls, session_dir: str | Path) -> "TranscriptStore":
@@ -35,7 +32,12 @@ class TranscriptStore:
         is_sidechain: bool = False,
         starting_parent_uuid: str | None = None,
     ) -> str | None:
-        parent_uuid = starting_parent_uuid if starting_parent_uuid is not None else self._last_parent_uuid
+        if starting_parent_uuid is not None:
+            parent_uuid = starting_parent_uuid
+        elif is_sidechain:
+            parent_uuid = self._last_sidechain_parent_uuid
+        else:
+            parent_uuid = self._last_parent_uuid
         with self.path.open("a", encoding="utf-8") as file:
             for message in messages:
                 entry = {
@@ -48,7 +50,10 @@ class TranscriptStore:
                 file.write(json.dumps(entry, ensure_ascii=False) + "\n")
                 if message.type in {"user", "assistant", "attachment", "system"}:
                     parent_uuid = message.uuid
-        self._last_parent_uuid = parent_uuid
+        if is_sidechain:
+            self._last_sidechain_parent_uuid = parent_uuid
+        else:
+            self._last_parent_uuid = parent_uuid
         return parent_uuid
 
     async def append_event(self, event: dict[str, object]) -> None:
@@ -62,7 +67,7 @@ class TranscriptStore:
             }
             file.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-    async def load_session(self) -> LoadedTranscript:
+    async def load_session(self, include_sidechains: bool = False) -> LoadedTranscript:
         messages: list[Message] = []
         events: list[dict[str, object]] = []
         last_parent_uuid: str | None = None
@@ -73,6 +78,8 @@ class TranscriptStore:
                 continue
             entry = json.loads(line)
             if "message" in entry:
+                if entry.get("is_sidechain") and not include_sidechains:
+                    continue
                 message = Message(**entry["message"])
                 messages.append(message)
                 last_parent_uuid = message.uuid

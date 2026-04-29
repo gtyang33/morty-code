@@ -8,9 +8,11 @@
 uv run morty-code
 uv run morty-code --once "读取 @README.md 并总结"
 uv run morty-code --session .morty/sessions/<session-id>.jsonl
+uv run morty-code --provider openai-compatible --model gpt-4.1-mini --once "hello"
 ```
 
 项目使用 `pyproject.toml` + `uv.lock` 管理环境，不需要 `pip install -r requirements.txt`。
+`openai-compatible` provider 使用标准库 HTTP 客户端，读取 `OPENAI_API_KEY` 和可选的 `OPENAI_BASE_URL`。
 
 当前已实现：
 
@@ -30,3 +32,5 @@ uv run morty-code --session .morty/sessions/<session-id>.jsonl
 - PromptBuilder 会把 durable memory index 与 session memory 注入 user_context
 - forked agent 支持 sidechain transcript 落盘
 - capability/skill discovery registry 基础结构
+- OpenAI-compatible provider 基础实现，无额外 Python 依赖
+- transcript 主链和 sidechain parent 分离，恢复默认只加载主链
