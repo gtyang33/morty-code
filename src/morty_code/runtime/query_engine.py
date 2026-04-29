@@ -60,6 +60,14 @@ class QueryEngine:
         )
         self.queue_manager.extend(queued_commands)
         queued_commands = self.queue_manager.drain()
+        await self.transcript_store.append_event(
+            {
+                "type": "turn_start",
+                "raw_input_chars": len(raw_input),
+                "queued_count": len(queued_commands),
+                "message_count_before": len(self.messages),
+            }
+        )
 
         new_messages: list[Message] = []
         should_query = False
@@ -96,6 +104,15 @@ class QueryEngine:
         if new_messages:
             await self.transcript_store.append_messages(new_messages)
         if not should_query:
+            await self.transcript_store.append_event(
+                {
+                    "type": "turn_finish",
+                    "queried_model": False,
+                    "input_message_count": len(new_messages),
+                    "output_message_count": 0,
+                    "message_count_after": len(self.messages),
+                }
+            )
             return new_messages
 
         await self._maybe_compact(tool_context)
@@ -116,6 +133,15 @@ class QueryEngine:
         if result.new_messages:
             await self.transcript_store.append_messages(result.new_messages)
             self._write_memories(tool_context, result.new_messages)
+        await self.transcript_store.append_event(
+            {
+                "type": "turn_finish",
+                "queried_model": True,
+                "input_message_count": len(new_messages),
+                "output_message_count": len(result.new_messages),
+                "message_count_after": len(self.messages),
+            }
+        )
         return result.new_messages
 
     def submit_message_sync(

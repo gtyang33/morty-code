@@ -214,6 +214,7 @@ class UserInputProcessor:
                     f"read_file_state: {len(tool_context.read_file_state)}",
                     f"session_memory_path: {tool_context.session_memory_path or 'none'}",
                     f"durable_memory_dir: {tool_context.durable_memory_dir or 'none'}",
+                    f"transcript_path: {tool_context.app_state.get('transcript_path', 'unknown')}",
                 ]
             ),
         }

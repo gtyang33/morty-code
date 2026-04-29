@@ -40,3 +40,4 @@ uv run morty-code --enable-local-tools
 - 本地 slash command：`/status`、`/tools`、`/memory-index`
 - 增量附件：`date_change`、`plan_mode`、`plan_mode_exit`、`hook_additional_context`
 - 多模态输入会过滤无效 image block，并在 OpenAI-compatible provider 中转换为 `image_url`
+- transcript metadata 会记录 `turn_start` / `turn_finish` 事件

@@ -61,6 +61,7 @@ def main() -> None:
         permission_mode="default",
         app_state={
             "cwd": ".",
+            "transcript_path": str(transcript_store.path),
             "tool_schemas": tool_registry.api_tool_schemas() if tool_registry is not None else [],
         },
         read_file_state={},
