@@ -172,6 +172,13 @@ class MessageNormalizer:
             ).strip()
         if attachment_type == "session_memory":
             return f"path: {payload.get('path', '')}\n{payload.get('content', '')}".strip()
+        if attachment_type in {
+            "date_change",
+            "plan_mode",
+            "plan_mode_exit",
+            "hook_additional_context",
+        }:
+            return "\n".join(f"{key}: {value}" for key, value in payload.items())
         return "\n".join(f"{key}: {value}" for key, value in payload.items())
 
     def _ensure_tool_pairing(self, messages: list[Message]) -> list[Message]:

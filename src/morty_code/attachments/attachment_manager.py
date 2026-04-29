@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from pathlib import Path
 
 from morty_code.memory.relevant_memory import RelevantMemoryFinder
@@ -9,6 +10,7 @@ from morty_code.types.runtime_state import FileViewState, QueuedCommand, ToolUse
 
 
 AT_MENTION_RE = re.compile(r"@([A-Za-z0-9_./-]+)")
+TURNS_BETWEEN_MODE_ATTACHMENTS = 3
 
 
 class AttachmentManager:
@@ -45,6 +47,9 @@ class AttachmentManager:
         queued_commands: list[QueuedCommand],
     ) -> list[Attachment]:
         attachments: list[Attachment] = []
+        attachments.extend(self._collect_date_change(context))
+        attachments.extend(self._collect_mode_reminders(context))
+        attachments.extend(self._collect_hook_context(context))
         for command in queued_commands:
             if command.mode not in {"prompt", "task-notification"}:
                 continue
@@ -117,3 +122,60 @@ class AttachmentManager:
             payload.update({"kind": "error", "content": f"读取失败: {exc}"})
 
         return Attachment(type="at_mentioned_file", payload=payload)
+
+    def _collect_date_change(self, context: ToolUseContext) -> list[Attachment]:
+        current_date = date.today().isoformat()
+        previous_date = context.app_state.get("last_attachment_date")
+        context.app_state["last_attachment_date"] = current_date
+        if previous_date is None or previous_date == current_date:
+            return []
+        return [
+            Attachment(
+                type="date_change",
+                payload={"previous_date": previous_date, "current_date": current_date},
+                is_meta=True,
+            )
+        ]
+
+    def _collect_mode_reminders(self, context: ToolUseContext) -> list[Attachment]:
+        turn_index = int(context.app_state.get("turn_index", 0)) + 1
+        context.app_state["turn_index"] = turn_index
+        plan_mode = bool(context.app_state.get("plan_mode", False))
+        if not plan_mode:
+            if context.app_state.pop("needs_plan_mode_exit_attachment", False):
+                return [
+                    Attachment(
+                        type="plan_mode_exit",
+                        payload={"content": "Plan mode has been exited. Implementation is allowed."},
+                        is_meta=True,
+                    )
+                ]
+            return []
+        last_sent = int(context.app_state.get("last_plan_mode_attachment_turn", 0))
+        if last_sent and turn_index - last_sent < TURNS_BETWEEN_MODE_ATTACHMENTS:
+            return []
+        context.app_state["last_plan_mode_attachment_turn"] = turn_index
+        return [
+            Attachment(
+                type="plan_mode",
+                payload={
+                    "content": "Plan mode is active. Do not modify files until the plan is approved.",
+                    "turn_index": turn_index,
+                },
+                is_meta=True,
+            )
+        ]
+
+    def _collect_hook_context(self, context: ToolUseContext) -> list[Attachment]:
+        queue = context.app_state.get("hook_context_queue")
+        if not isinstance(queue, list) or not queue:
+            return []
+        context.app_state["hook_context_queue"] = []
+        return [
+            Attachment(
+                type="hook_additional_context",
+                payload={"content": str(item)},
+                is_meta=True,
+            )
+            for item in queue
+        ]

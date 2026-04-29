@@ -150,6 +150,22 @@ class UserInputProcessor:
         )
         registry.register(
             CommandSpec(
+                name="plan",
+                description="进入 plan mode",
+                kind="local",
+                handler=self._handle_plan_mode,
+            )
+        )
+        registry.register(
+            CommandSpec(
+                name="auto",
+                description="退出 plan mode，回到自动执行",
+                kind="local",
+                handler=self._handle_auto_mode,
+            )
+        )
+        registry.register(
+            CommandSpec(
                 name="compact",
                 description="请求对话压缩",
                 kind="prompt",
@@ -231,6 +247,24 @@ class UserInputProcessor:
             return {"mode": "local", "content": "No durable memory directory configured."}
         index = DurableMemoryStore(tool_context.durable_memory_dir).read_index()
         return {"mode": "local", "content": index.strip() or "Memory index is empty."}
+
+    async def _handle_plan_mode(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        tool_context = context["tool_context"]
+        if not isinstance(tool_context, ToolUseContext):
+            return {"mode": "local", "content": "Tool context unavailable."}
+        tool_context.app_state["plan_mode"] = True
+        tool_context.app_state["last_plan_mode_attachment_turn"] = 0
+        return {"mode": "local", "content": "Plan mode enabled."}
+
+    async def _handle_auto_mode(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        tool_context = context["tool_context"]
+        if not isinstance(tool_context, ToolUseContext):
+            return {"mode": "local", "content": "Tool context unavailable."}
+        was_plan_mode = bool(tool_context.app_state.get("plan_mode", False))
+        tool_context.app_state["plan_mode"] = False
+        if was_plan_mode:
+            tool_context.app_state["needs_plan_mode_exit_attachment"] = True
+        return {"mode": "local", "content": "Auto mode enabled."}
 
     async def _handle_compact(self, args: str, context: dict[str, object]) -> dict[str, object]:
         return {
