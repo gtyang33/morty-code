@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -25,6 +26,8 @@ class SubagentTask:
     transcript_path: str | None = None
     output: str = ""
     error: str = ""
+    process_id: int | None = None
+    heartbeat_at: str | None = None
     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
 
@@ -60,12 +63,16 @@ class SubagentTaskRegistry:
             prompt=prompt,
             status="running",
             output_file=output_file,
+            process_id=os.getpid(),
         )
         self.update(task)
         return task
 
     def update(self, task: SubagentTask) -> None:
-        task.updated_at = datetime.utcnow().isoformat()
+        now = datetime.utcnow().isoformat()
+        task.updated_at = now
+        if task.status == "running":
+            task.heartbeat_at = now
         with self._lock:
             self._tasks[task.task_id] = task
             Path(task.output_file).parent.mkdir(parents=True, exist_ok=True)
@@ -84,7 +91,7 @@ class SubagentTaskRegistry:
             return None
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-            task = SubagentTask(**payload)
+            task = _task_from_payload(payload)
         except (OSError, json.JSONDecodeError, TypeError):
             return None
         with self._lock:
@@ -98,7 +105,7 @@ class SubagentTaskRegistry:
         for path in sorted(self.root.glob("*.json")):
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
-                task = SubagentTask(**payload)
+                task = _task_from_payload(payload)
             except (OSError, json.JSONDecodeError, TypeError):
                 continue
             tasks[task.task_id] = task
@@ -118,7 +125,11 @@ class SubagentTaskRegistry:
             )
         return "\n".join(lines)
 
-    def interrupt_running(self, reason: str = "parent process exited") -> int:
+    def interrupt_running(
+        self,
+        reason: str = "parent process exited",
+        process_id: int | None = None,
+    ) -> int:
         """把仍在 running 的任务标记为 interrupted。
 
         进程内后台线程无法在父进程退出后继续执行；退出前显式标记，避免
@@ -128,6 +139,30 @@ class SubagentTaskRegistry:
         interrupted = 0
         for task in self.list():
             if task.status != "running":
+                continue
+            if process_id is not None and task.process_id != process_id:
+                continue
+            task.status = "interrupted"
+            task.error = reason
+            self.update(task)
+            interrupted += 1
+        return interrupted
+
+    def interrupt_orphaned_running(
+        self,
+        reason: str = "parent process is not running",
+    ) -> int:
+        """标记 owner 进程已经不存在的 running 任务。
+
+        这是 crash/SIGKILL 后的轻量 reaper。真正的 resume 还没做，所以当前
+        策略是诚实地把不可继续执行的任务变成 terminal 状态。
+        """
+
+        interrupted = 0
+        for task in self.list():
+            if task.status != "running":
+                continue
+            if task.process_id is not None and _pid_is_alive(task.process_id):
                 continue
             task.status = "interrupted"
             task.error = reason
@@ -144,3 +179,22 @@ def get_subagent_task_registry(root: str | Path = ".morty/tasks") -> SubagentTas
     if _REGISTRY is None or _REGISTRY.root != Path(root):
         _REGISTRY = SubagentTaskRegistry(root)
     return _REGISTRY
+
+
+def _task_from_payload(payload: dict[str, object]) -> SubagentTask:
+    allowed = set(SubagentTask.__dataclass_fields__)
+    return SubagentTask(**{key: value for key, value in payload.items() if key in allowed})
+
+
+def _pid_is_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True

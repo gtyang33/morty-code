@@ -55,6 +55,12 @@ Claude Code 的 `AgentTool` 不是普通函数工具，而是一个 agent runtim
 - `task_output(block=true)` 看到 `interrupted` 会立即返回，不再对旧任务等待到 timeout。
 - 这只覆盖正常退出；SIGKILL、断电、进程崩溃后的孤儿 running 任务仍需要后续 reaper/resume。
 
+第五轮补充：
+
+- 后台任务记录 `process_id` 和 `heartbeat_at`。
+- CLI 启动和 `task_output` 查询时会扫描 owner 进程不存在的 `running` 任务，并标记为 `interrupted`。
+- 正常退出只中断当前 pid 创建的任务，避免多个 morty-code 实例共享 `.morty/tasks` 时互相覆盖。
+
 暂不实现：
 
 - progress UI、kill/resume。

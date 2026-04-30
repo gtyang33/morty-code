@@ -31,6 +31,7 @@ def register_task_output_tool(registry: ToolRegistry) -> None:
         timeout_ms = _bounded_timeout(args.get("timeout_ms"))
         registry_root = str(context.app_state.get("subagent_tasks_dir") or ".morty/tasks")
         task_registry = get_subagent_task_registry(registry_root)
+        task_registry.interrupt_orphaned_running()
         task = task_registry.get(task_id)
         if task is None:
             return {"retrieval_status": "not_found", "task": None}

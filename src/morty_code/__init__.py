@@ -166,7 +166,11 @@ def main() -> None:
     atexit.register(
         _mark_running_subagents_interrupted,
         str(tool_context.app_state["subagent_tasks_dir"]),
+        os.getpid(),
     )
+    get_subagent_task_registry(
+        str(tool_context.app_state["subagent_tasks_dir"])
+    ).interrupt_orphaned_running()
     if args.session:
         restored = asyncio.run(
             engine.restore_from_transcript(
@@ -226,13 +230,13 @@ def _print_cli_message(message: Message) -> None:
         print(rendered)
 
 
-def _mark_running_subagents_interrupted(task_dir: str) -> None:
+def _mark_running_subagents_interrupted(task_dir: str, process_id: int) -> None:
     """CLI 正常退出时标记未完成后台子代理。
 
     这里只处理正常解释器退出；SIGKILL、机器断电等场景需要后续 resume/reaper。
     """
 
-    get_subagent_task_registry(task_dir).interrupt_running()
+    get_subagent_task_registry(task_dir).interrupt_running(process_id=process_id)
 
 
 def _render_cli_message(message: Message) -> str:
