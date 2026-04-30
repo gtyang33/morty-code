@@ -3,6 +3,7 @@ from morty_code.agents.forked_agent import ForkedAgentResult, ForkedAgentRunner
 from morty_code.agents.skill_registry import CapabilitySpec, SkillRegistry
 from morty_code.agents.subagent_runner import SubagentRunner
 from morty_code.agents.task_registry import SubagentTask, SubagentTaskRegistry
+from morty_code.agents.task_output_tool import register_task_output_tool
 
 __all__ = [
     "AgentDefinition",
@@ -14,4 +15,5 @@ __all__ = [
     "SubagentRunner",
     "SubagentTask",
     "SubagentTaskRegistry",
+    "register_task_output_tool",
 ]

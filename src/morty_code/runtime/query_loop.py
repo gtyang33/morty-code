@@ -13,6 +13,7 @@ from morty_code.cache.prompt_cache import (
     extract_cache_usage,
 )
 from morty_code.agents.subagent_tool import register_subagent_tool
+from morty_code.agents.task_output_tool import register_task_output_tool
 from morty_code.tools.tool_result_budget import apply_tool_result_budget
 from morty_code.transcript.message_normalizer import MessageNormalizer
 from morty_code.types.messages import Message
@@ -47,6 +48,7 @@ class QueryLoop:
         registry = getattr(tool_runner, "registry", None)
         if registry is not None:
             register_subagent_tool(self, registry)
+            register_task_output_tool(registry)
         self.normalizer = MessageNormalizer()
         self.attachment_manager = attachment_manager or AttachmentManager()
         self.max_iterations = max_iterations

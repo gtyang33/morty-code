@@ -76,7 +76,47 @@ class SubagentTaskRegistry:
 
     def get(self, task_id: str) -> SubagentTask | None:
         with self._lock:
-            return self._tasks.get(task_id)
+            cached = self._tasks.get(task_id)
+        if cached is not None:
+            return cached
+        path = self.root / f"{task_id}.json"
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            task = SubagentTask(**payload)
+        except (OSError, json.JSONDecodeError, TypeError):
+            return None
+        with self._lock:
+            self._tasks[task.task_id] = task
+        return task
+
+    def list(self) -> list[SubagentTask]:
+        """列出内存和磁盘上的任务摘要。"""
+
+        tasks: dict[str, SubagentTask] = {}
+        for path in sorted(self.root.glob("*.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                task = SubagentTask(**payload)
+            except (OSError, json.JSONDecodeError, TypeError):
+                continue
+            tasks[task.task_id] = task
+        with self._lock:
+            tasks.update(self._tasks)
+        return sorted(tasks.values(), key=lambda task: task.created_at, reverse=True)
+
+    def format_list(self, limit: int = 20) -> str:
+        tasks = self.list()[:limit]
+        if not tasks:
+            return "No subagent tasks."
+        lines = []
+        for task in tasks:
+            lines.append(
+                f"{task.task_id}  {task.status}  {task.agent_type}  "
+                f"{task.description}  output={task.output_file}"
+            )
+        return "\n".join(lines)
 
 
 _REGISTRY: SubagentTaskRegistry | None = None

@@ -6,6 +6,7 @@ from uuid import uuid4
 from morty_code.attachments.attachment_manager import AttachmentManager
 from morty_code.input.commands import CommandRegistry, CommandSpec
 from morty_code.input.slash_commands import SlashCommandProcessor, parse_slash_command
+from morty_code.agents.task_registry import get_subagent_task_registry
 from morty_code.memory.durable_memory import DurableMemoryStore
 from morty_code.plan import PlanStore
 from morty_code.types.messages import Attachment, Message
@@ -142,6 +143,14 @@ class UserInputProcessor:
         )
         registry.register(
             CommandSpec(
+                name="tasks",
+                description="显示后台 subagent 任务",
+                kind="local",
+                handler=self._handle_tasks,
+            )
+        )
+        registry.register(
+            CommandSpec(
                 name="memory-index",
                 description="显示 durable memory 索引",
                 kind="local",
@@ -211,6 +220,32 @@ class UserInputProcessor:
                 f"/{command.name} - {command.description}" for command in commands
             ),
         }
+
+    async def _handle_tasks(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        tool_context = context["tool_context"]
+        if not isinstance(tool_context, ToolUseContext):
+            return {"mode": "local", "content": "Task context unavailable."}
+        task_dir = str(tool_context.app_state.get("subagent_tasks_dir") or ".morty/tasks")
+        registry = get_subagent_task_registry(task_dir)
+        if args.strip():
+            task = registry.get(args.strip())
+            if task is None:
+                return {"mode": "local", "content": f"No subagent task found: {args.strip()}"}
+            lines = [
+                f"task_id: {task.task_id}",
+                f"status: {task.status}",
+                f"agent_type: {task.agent_type}",
+                f"description: {task.description}",
+                f"output_file: {task.output_file}",
+                f"transcript_path: {task.transcript_path or 'none'}",
+            ]
+            if task.error:
+                lines.append(f"error: {task.error}")
+            if task.output:
+                lines.append("")
+                lines.append(task.output)
+            return {"mode": "local", "content": "\n".join(lines)}
+        return {"mode": "local", "content": registry.format_list()}
 
     async def _handle_status(self, args: str, context: dict[str, object]) -> dict[str, object]:
         tool_context = context["tool_context"]
