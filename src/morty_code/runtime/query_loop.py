@@ -12,6 +12,7 @@ from morty_code.cache.prompt_cache import (
     PromptCachePlanner,
     extract_cache_usage,
 )
+from morty_code.agents.subagent_tool import register_subagent_tool
 from morty_code.tools.tool_result_budget import apply_tool_result_budget
 from morty_code.transcript.message_normalizer import MessageNormalizer
 from morty_code.types.messages import Message
@@ -43,6 +44,9 @@ class QueryLoop:
     ) -> None:
         self.model_client = model_client
         self.tool_runner = tool_runner
+        registry = getattr(tool_runner, "registry", None)
+        if registry is not None:
+            register_subagent_tool(self, registry)
         self.normalizer = MessageNormalizer()
         self.attachment_manager = attachment_manager or AttachmentManager()
         self.max_iterations = max_iterations
@@ -141,7 +145,7 @@ class QueryLoop:
             new_messages.append(assistant_message)
             working_messages.append(assistant_message)
 
-            tool_messages = await self.tool_runner.run(assistant_message, tool_context)
+            tool_messages = await self.tool_runner.run(assistant_message, tool_context, cache_safe)
             if not tool_messages:
                 break
             new_messages.extend(tool_messages)

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Any
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
+
+if TYPE_CHECKING:
+    from morty_code.types.runtime_state import CacheSafeParams, ToolUseContext
 
 
-ToolHandler = Callable[[dict[str, object]], Awaitable[dict[str, object]]]
+ToolHandler = Callable[..., Awaitable[dict[str, object]]]
 
 
 @dataclass
@@ -13,6 +16,7 @@ class ToolSpec:
     description: str
     handler: ToolHandler
     input_schema: dict[str, Any] | None = None
+    needs_context: bool = False
 
 
 class ToolRegistry:
@@ -28,7 +32,7 @@ class ToolRegistry:
     def list_names(self) -> list[str]:
         return [tool.name for tool in self._tools]
 
-    def api_tool_schemas(self) -> list[dict[str, object]]:
+    def api_tool_schemas(self, allowed_names: set[str] | None = None) -> list[dict[str, object]]:
         """渲染 OpenAI-compatible tools schema。"""
 
         return [
@@ -45,4 +49,5 @@ class ToolRegistry:
                 },
             }
             for tool in self._tools
+            if allowed_names is None or tool.name in allowed_names
         ]

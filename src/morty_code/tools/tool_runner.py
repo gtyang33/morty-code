@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from morty_code.tools.tool_registry import ToolRegistry
 from morty_code.types.messages import Message
-from morty_code.types.runtime_state import ToolUseContext
+from morty_code.types.runtime_state import CacheSafeParams, ToolUseContext
 
 
 class NullToolRunner:
@@ -15,6 +15,7 @@ class NullToolRunner:
         self,
         assistant_message: Message,
         context: ToolUseContext,
+        cache_safe: CacheSafeParams | None = None,
     ) -> list[Message]:
         return []
 
@@ -33,6 +34,7 @@ class ToolRunner:
         self,
         assistant_message: Message,
         context: ToolUseContext,
+        cache_safe: CacheSafeParams | None = None,
     ) -> list[Message]:
         tool_uses = self._extract_tool_uses(assistant_message)
         results: list[dict[str, object]] = []
@@ -49,7 +51,12 @@ class ToolRunner:
                 )
                 continue
             try:
-                payload = await tool.handler(dict(tool_use.get("input") or {}))
+                if tool.needs_context:
+                    if cache_safe is None:
+                        raise RuntimeError("cache_safe context is required for this tool")
+                    payload = await tool.handler(dict(tool_use.get("input") or {}), context, cache_safe)
+                else:
+                    payload = await tool.handler(dict(tool_use.get("input") or {}))
                 content = self._maybe_replace_large_result(tool_use, payload, context)
                 results.append(self._tool_result(tool_use, content=content, is_error=False))
             except Exception as exc:  # noqa: BLE001 - 工具异常必须进入 transcript，不能丢失。
