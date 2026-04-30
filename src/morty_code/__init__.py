@@ -3,8 +3,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import builtins
+import json
 import os
-from dataclasses import asdict
 from pathlib import Path
 
 from morty_code.api.model_client import EchoModelClient, OpenAICompatibleModelClient
@@ -20,6 +20,7 @@ from morty_code.runtime.query_engine import QueryEngine
 from morty_code.runtime.query_loop import QueryLoop
 from morty_code.tools import NullToolRunner, ToolRunner, create_local_tool_registry
 from morty_code.transcript.transcript_store import TranscriptStore
+from morty_code.types.messages import Message
 from morty_code.types.runtime_state import ContentReplacementState, ToolUseContext
 
 
@@ -81,7 +82,7 @@ def main() -> None:
 
     if args.once is not None:
         for message in engine.submit_message_sync(args.once, tool_context):
-            print(asdict(message))
+            print(_render_cli_message(message))
         return
 
     while True:
@@ -92,4 +93,53 @@ def main() -> None:
             continue
         messages = engine.submit_message_sync(raw, tool_context)
         for message in messages:
-            print(asdict(message))
+            print(_render_cli_message(message))
+
+
+def _render_cli_message(message: Message) -> str:
+    """把内部消息渲染成面向人的 CLI 文本，完整结构仍保存在 transcript。"""
+
+    content = message.payload.get("content")
+    rendered = _render_content(content)
+    if message.type == "assistant":
+        return rendered
+    if message.type == "system":
+        subtype = message.payload.get("subtype")
+        prefix = f"[system:{subtype}]" if subtype else "[system]"
+        return f"{prefix}\n{rendered}".strip()
+    if message.type == "user":
+        return f"[user]\n{rendered}".strip()
+    if message.type == "attachment":
+        attachment_type = message.payload.get("attachment_type", "unknown")
+        return f"[attachment:{attachment_type}]\n{rendered}".strip()
+    return f"[{message.type}]\n{rendered}".strip()
+
+
+def _render_content(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return _json_fallback(content)
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "text":
+            parts.append(str(block.get("text", "")))
+            continue
+        if isinstance(block, dict) and block.get("type") == "tool_use":
+            parts.append(
+                f"[tool_use:{block.get('name', 'unknown')} id={block.get('id', '')}]"
+            )
+            continue
+        if isinstance(block, dict) and block.get("type") == "tool_result":
+            status = "error" if block.get("is_error") else "ok"
+            parts.append(
+                f"[tool_result:{status} id={block.get('tool_use_id', '')}]\n"
+                f"{_render_content(block.get('content'))}"
+            )
+            continue
+        parts.append(_json_fallback(block))
+    return "\n".join(part for part in parts if part).strip()
+
+
+def _json_fallback(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
