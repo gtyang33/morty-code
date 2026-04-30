@@ -5,7 +5,15 @@ import asyncio
 import builtins
 import json
 import os
+import sys
+import threading
 from pathlib import Path
+
+from prompt_toolkit import PromptSession
+from prompt_toolkit.formatted_text import FormattedText
+from prompt_toolkit.history import FileHistory
+from prompt_toolkit.lexers import Lexer
+from prompt_toolkit.styles import Style
 
 from morty_code.api.model_client import EchoModelClient, OpenAICompatibleModelClient
 from morty_code.attachments.attachment_manager import AttachmentManager
@@ -22,6 +30,80 @@ from morty_code.tools import NullToolRunner, ToolRunner, create_local_tool_regis
 from morty_code.transcript.transcript_store import TranscriptStore
 from morty_code.types.messages import Message
 from morty_code.types.runtime_state import ContentReplacementState, ToolUseContext
+
+# ---------------------------------------------------------------------------
+# REPL 语法高亮 & 空闲动画
+# ---------------------------------------------------------------------------
+
+_MORTY_STYLE = Style.from_dict(
+    {
+        "slash": "#ansicyan bold",
+        "command": "#ansigreen bold",
+        "argument": "#ansiwhite",
+        "text": "",
+    }
+)
+
+_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+
+class _ReplLexer(Lexer):
+    """简单 lexer：/command 高亮，其余为普通文本。"""
+
+    def lex_document(self, document):
+        lines = document.lines
+
+        def get_line(lineno):
+            line = lines[lineno]
+            if not line:
+                return [("", "")]
+            if line.startswith("/"):
+                parts = line.split(None, 1)
+                slash_cmd = parts[0]
+                rest = parts[1] if len(parts) > 1 else ""
+                tokens: list[tuple[str, str]] = [("class:slash", "/")]
+                tokens.append(("class:command", slash_cmd[1:]))
+                if rest:
+                    tokens.append(("class:argument", " " + rest))
+                return tokens
+            return [("", line)]
+
+        return get_line
+
+
+class _Spinner:
+    """在 stderr 上显示旋转动画，用于模型响应等待期间。"""
+
+    def __init__(self, frames=None, interval=0.12):
+        self.frames = frames or _SPINNER_FRAMES
+        self.interval = interval
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self, text: str = "thinking"):
+        if self._thread is not None:
+            return
+        self._stop.clear()
+
+        def _spin():
+            idx = 0
+            while not self._stop.is_set():
+                frame = self.frames[idx % len(self.frames)]
+                sys.stderr.write(f"\r  {frame} {text}...")
+                sys.stderr.flush()
+                idx += 1
+                self._stop.wait(self.interval)
+            sys.stderr.write("\r" + " " * (len(text) + 12) + "\r")
+            sys.stderr.flush()
+
+        self._thread = threading.Thread(target=_spin, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join()
+            self._thread = None
 
 
 def main() -> None:
@@ -97,13 +179,33 @@ def main() -> None:
             _print_cli_message(message)
         return
 
+    history_file = Path(".morty/repl_history")
+    history_file.parent.mkdir(parents=True, exist_ok=True)
+
+    session: PromptSession[str] = PromptSession(
+        history=FileHistory(str(history_file)),
+        lexer=_ReplLexer(),
+        style=_MORTY_STYLE,
+    )
+    spinner = _Spinner()
+
     while True:
-        raw = builtins.input("morty-code> ").strip()
+        try:
+            raw = session.prompt(
+                FormattedText([("class:slash", "morty-code"), ("", "> ")]),
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
         if raw in {"/exit", "/quit"}:
             return
         if not raw:
             continue
-        messages = engine.submit_message_sync(raw, tool_context)
+        spinner.start("thinking")
+        try:
+            messages = engine.submit_message_sync(raw, tool_context)
+        finally:
+            spinner.stop()
         for message in messages:
             _print_cli_message(message)
 
