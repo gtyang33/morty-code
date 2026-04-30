@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import uuid4
 
+from morty_code.api.errors import ModelProviderError
 from morty_code.types.messages import Message
 
 
@@ -113,7 +114,18 @@ class OpenAICompatibleModelClient:
                 payload = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"model provider returned HTTP {exc.code}: {detail}") from exc
+            retry_after = _parse_retry_after(exc.headers.get("retry-after"))
+            raise ModelProviderError(
+                f"model provider returned HTTP {exc.code}",
+                status=exc.code,
+                detail=detail,
+                retry_after=retry_after,
+            ) from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise ModelProviderError(
+                f"model provider connection failed: {exc}",
+                detail=str(exc),
+            ) from exc
         choice = payload.get("choices", [{}])[0].get("message", {})
         message = self._message_from_choice(choice)
         if isinstance(payload.get("usage"), dict):
@@ -304,3 +316,12 @@ class OpenAICompatibleModelClient:
                 if key not in {"cache_control", "cache_reference"}
             }
         return value
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        return None

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
+from uuid import uuid4
 
 from morty_code.compact.auto_compact import AutoCompactDecider
 from morty_code.compact.compact_agent import CompactAgent
@@ -135,16 +137,29 @@ class QueryEngine:
         system_prompt, user_context, system_context = await self.prompt_builder.build_for_context(
             tool_context
         )
-        result = await self.query_loop.run(
-            messages=messages_for_query,
-            cache_safe=CacheSafeParams(
-                system_prompt=system_prompt,
-                user_context=user_context,
-                system_context=system_context,
-                messages=list(messages_for_query),
-            ),
-            tool_context=tool_context,
-        )
+        try:
+            result = await self.query_loop.run(
+                messages=messages_for_query,
+                cache_safe=CacheSafeParams(
+                    system_prompt=system_prompt,
+                    user_context=user_context,
+                    system_context=system_context,
+                    messages=list(messages_for_query),
+                ),
+                tool_context=tool_context,
+            )
+        except Exception as exc:  # noqa: BLE001 - 顶层兜底，保证 transcript 不因异常断链。
+            error_message = self._assistant_error_message(str(exc))
+            self.messages.append(error_message)
+            await self.transcript_store.append_event(
+                {
+                    "type": "turn_failed",
+                    "error": str(exc),
+                    "message_count_before_failure": len(self.messages),
+                }
+            )
+            await self.transcript_store.append_messages([error_message])
+            return [error_message]
         self.messages.extend(result.new_messages)
         for event in result.metadata_events:
             await self.transcript_store.append_event(event)
@@ -246,3 +261,15 @@ class QueryEngine:
             if message.type == "system" and message.payload.get("subtype") == "compact_boundary":
                 return self.messages[index:]
         return self.messages
+
+    def _assistant_error_message(self, content: str) -> Message:
+        return Message(
+            uuid=str(uuid4()),
+            timestamp=datetime.utcnow().isoformat(),
+            type="assistant",
+            payload={
+                "content": [{"type": "text", "text": f"Runtime error: {content}"}],
+                "is_api_error": True,
+            },
+            is_meta=True,
+        )

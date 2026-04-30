@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
+from datetime import datetime
+from uuid import uuid4
 
+from morty_code.api.errors import ModelProviderError
 from morty_code.attachments.attachment_manager import AttachmentManager
 from morty_code.cache.prompt_cache import (
     PromptCacheBreakDetector,
@@ -35,12 +39,14 @@ class QueryLoop:
         tool_runner,
         attachment_manager: AttachmentManager | None = None,
         max_iterations: int = 6,
+        max_api_retries: int = 2,
     ) -> None:
         self.model_client = model_client
         self.tool_runner = tool_runner
         self.normalizer = MessageNormalizer()
         self.attachment_manager = attachment_manager or AttachmentManager()
         self.max_iterations = max_iterations
+        self.max_api_retries = max_api_retries
         self.cache_detector = PromptCacheBreakDetector()
 
     async def run(
@@ -74,12 +80,10 @@ class QueryLoop:
                     }
                 )
             api_messages = self.normalizer.normalize_for_api(working_messages, tool_context.tools)
-            tool_schemas_json = cache_safe.system_context.get("tool_schemas_json")
-            tool_schemas = []
-            if tool_schemas_json:
-                import json
-
-                tool_schemas = json.loads(tool_schemas_json)
+            tool_schemas = self._load_tool_schemas(
+                cache_safe.system_context.get("tool_schemas_json"),
+                metadata_events,
+            )
             cache_plan = PromptCachePlanner(
                 enable_prompt_caching=bool(tool_context.app_state.get("enable_prompt_caching", True)),
                 use_global_scope=bool(tool_context.app_state.get("use_global_prompt_cache_scope", True)),
@@ -99,16 +103,24 @@ class QueryLoop:
             )
             if cache_event is not None:
                 metadata_events.append(cache_event)
-            cache_safe.system_context["prompt_cache_plan_json"] = self._json_dumps(cache_plan)
+            request_system_context = dict(cache_safe.system_context)
+            request_system_context["prompt_cache_plan_json"] = self._json_dumps(cache_plan)
+            request_messages = api_messages
             if tool_context.app_state.get("send_cache_control"):
-                api_messages = cache_plan["messages"]
-                cache_safe.system_context["tool_schemas_json"] = self._json_dumps(cache_plan["tool_schemas"])
-            assistant_message = await self.model_client.respond(
-                messages=api_messages,
+                request_messages = cache_plan["messages"]
+                request_system_context["tool_schemas_json"] = self._json_dumps(cache_plan["tool_schemas"])
+            assistant_message = await self._respond_with_retries(
+                messages=request_messages,
+                fallback_messages=api_messages,
                 system_prompt=cache_safe.system_prompt,
                 user_context=cache_safe.user_context,
-                system_context=cache_safe.system_context,
+                system_context=request_system_context,
+                fallback_system_context=cache_safe.system_context,
+                metadata_events=metadata_events,
             )
+            if assistant_message.payload.get("is_api_error"):
+                new_messages.append(assistant_message)
+                break
             usage = extract_cache_usage(assistant_message.payload)
             if usage["cache_read_input_tokens"] or usage["cache_creation_input_tokens"]:
                 tool_context.prompt_cache_state.cache_read_input_tokens += usage["cache_read_input_tokens"]
@@ -152,7 +164,129 @@ class QueryLoop:
             metadata_events=metadata_events,
         )
 
+    async def _respond_with_retries(
+        self,
+        messages: list[dict[str, object]],
+        fallback_messages: list[dict[str, object]],
+        system_prompt: list[str],
+        user_context: dict[str, str],
+        system_context: dict[str, str],
+        fallback_system_context: dict[str, str],
+        metadata_events: list[dict[str, object]],
+    ) -> Message:
+        cache_disabled_for_retry = False
+        active_messages = messages
+        active_system_context = system_context
+        attempt = 1
+        while attempt <= self.max_api_retries + 1:
+            try:
+                return await self.model_client.respond(
+                    messages=active_messages,
+                    system_prompt=system_prompt,
+                    user_context=user_context,
+                    system_context=active_system_context,
+                )
+            except ModelProviderError as exc:
+                if exc.status == 400 and not cache_disabled_for_retry and active_messages is not fallback_messages:
+                    cache_disabled_for_retry = True
+                    active_messages = fallback_messages
+                    active_system_context = fallback_system_context
+                    metadata_events.append(
+                        {
+                            "type": "prompt-cache-disabled-for-retry",
+                            "status": exc.status,
+                            "detail": _shorten(exc.detail or str(exc)),
+                        }
+                    )
+                    # cache 字段兼容性降级不消耗 API retry 预算。
+                    continue
+                if attempt <= self.max_api_retries and exc.retryable:
+                    delay = self._retry_delay(attempt, exc.retry_after)
+                    metadata_events.append(
+                        {
+                            "type": "api-retry",
+                            "attempt": attempt,
+                            "max_retries": self.max_api_retries,
+                            "delay_seconds": delay,
+                            "status": exc.status,
+                            "error": _shorten(exc.detail or str(exc)),
+                        }
+                    )
+                    await asyncio.sleep(delay)
+                    attempt += 1
+                    continue
+                metadata_events.append(
+                    {
+                        "type": "query_failed",
+                        "status": exc.status,
+                        "retryable": exc.retryable,
+                        "error": _shorten(exc.detail or str(exc), 2000),
+                    }
+                )
+                return self._api_error_message(exc.detail or str(exc), status=exc.status)
+            except Exception as exc:  # noqa: BLE001 - 未分类 provider bug 也要转成 transcript 消息。
+                metadata_events.append(
+                    {
+                        "type": "query_failed",
+                        "status": None,
+                        "retryable": False,
+                        "error": _shorten(str(exc), 2000),
+                    }
+                )
+                return self._api_error_message(str(exc), status=None)
+        return self._api_error_message("model provider retry loop exhausted", status=None)
+
+    def _load_tool_schemas(
+        self,
+        tool_schemas_json: str | None,
+        metadata_events: list[dict[str, object]],
+    ) -> list[dict[str, object]]:
+        if not tool_schemas_json:
+            return []
+        try:
+            import json
+
+            loaded = json.loads(tool_schemas_json)
+            return loaded if isinstance(loaded, list) else []
+        except Exception as exc:  # noqa: BLE001 - cache plan 失败应降级，不应中断 turn。
+            metadata_events.append(
+                {
+                    "type": "prompt-cache-plan-failed",
+                    "reason": "tool_schemas_json_parse_failed",
+                    "error": _shorten(str(exc)),
+                }
+            )
+            return []
+
+    def _api_error_message(self, content: str, status: int | None) -> Message:
+        prefix = f"Model provider error"
+        if status is not None:
+            prefix += f" HTTP {status}"
+        return Message(
+            uuid=str(uuid4()),
+            timestamp=datetime.utcnow().isoformat(),
+            type="assistant",
+            payload={
+                "content": [{"type": "text", "text": f"{prefix}: {_shorten(content, 4000)}"}],
+                "is_api_error": True,
+                "status": status,
+            },
+            is_meta=True,
+        )
+
+    def _retry_delay(self, attempt: int, retry_after: float | None) -> float:
+        if retry_after is not None:
+            return min(retry_after, 5.0)
+        return min(0.25 * (2 ** (attempt - 1)), 2.0)
+
     def _json_dumps(self, value: object) -> str:
         import json
 
         return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _shorten(value: str, limit: int = 500) -> str:
+    value = " ".join(value.split())
+    if len(value) <= limit:
+        return value
+    return f"{value[: limit - 3]}..."
