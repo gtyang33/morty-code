@@ -54,12 +54,14 @@ class QueryLoop:
         messages: list[Message],
         cache_safe: CacheSafeParams,
         tool_context: ToolUseContext,
+        max_iterations: int | None = None,
     ) -> QueryLoopResult:
         new_messages: list[Message] = []
         metadata_events: list[dict[str, object]] = []
         working_messages = list(messages)
         assistant_message: Message | None = None
-        for _ in range(self.max_iterations):
+        iteration_limit = self.max_iterations if max_iterations is None else max(1, max_iterations)
+        for _ in range(iteration_limit):
             working_messages, replacement_records = apply_tool_result_budget(
                 working_messages,
                 tool_context.content_replacement_state,

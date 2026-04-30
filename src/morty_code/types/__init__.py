@@ -7,6 +7,7 @@ from morty_code.types.runtime_state import (
     ProcessedUserInput,
     QueuedCommand,
     ToolUseContext,
+    clone_tool_use_context_for_fork,
 )
 
 __all__ = [
@@ -19,4 +20,5 @@ __all__ = [
     "ProcessedUserInput",
     "QueuedCommand",
     "ToolUseContext",
+    "clone_tool_use_context_for_fork",
 ]

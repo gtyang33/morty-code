@@ -31,7 +31,7 @@ uv run morty-code --enable-local-tools
 - resume/recovery 时清理孤儿 tool_result 与空 assistant 消息
 - 大 tool_result 稳定替换，避免长会话 prompt 膨胀
 - PromptBuilder 会把 durable memory index 与 session memory 注入 user_context
-- forked agent 支持 sidechain transcript 落盘
+- forked agent 支持 sidechain transcript 落盘、cache-safe 前缀继承和 mutable state 隔离
 - capability/skill discovery registry 基础结构
 - OpenAI-compatible provider 基础实现，无额外 Python 依赖
 - transcript 主链和 sidechain parent 分离，恢复默认只加载主链

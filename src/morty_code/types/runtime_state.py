@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -69,6 +70,48 @@ class ToolUseContext:
     discovered_skill_names: set[str] = field(default_factory=set)
     session_memory_path: str | None = None
     durable_memory_dir: str | None = None
+
+
+def clone_tool_use_context_for_fork(
+    context: ToolUseContext,
+    *,
+    fork_label: str = "forked_agent",
+    skip_cache_write: bool = False,
+) -> ToolUseContext:
+    """为 forked agent 显式 clone 可变状态。
+
+    不直接暴露 `deepcopy(context)`，是为了把 Claude Code 里的关键协议写清楚：
+    read_file_state / content replacement 要 clone，避免 fork 改父线程；
+    prompt cache 的 cache-safe 参数由调用方继承；runtime detector 统计从零开始，
+    避免 fork 多出来的 prompt 被误报为父线程 cache break。
+    """
+
+    app_state = deepcopy(context.app_state)
+    app_state["fork"] = {
+        "label": fork_label,
+        "isolated": True,
+        "skip_cache_write": skip_cache_write,
+        "parent_prompt_cache_hashes": dict(context.prompt_cache_state.previous_hashes),
+    }
+    if skip_cache_write:
+        app_state["skip_cache_write"] = True
+
+    return ToolUseContext(
+        tools=list(context.tools),
+        model=context.model,
+        permission_mode=context.permission_mode,
+        app_state=app_state,
+        read_file_state=deepcopy(context.read_file_state),
+        content_replacement_state=ContentReplacementState(
+            seen_ids=set(context.content_replacement_state.seen_ids),
+            replacements=dict(context.content_replacement_state.replacements),
+        ),
+        prompt_cache_state=PromptCacheRuntimeState(),
+        loaded_nested_memory_paths=set(context.loaded_nested_memory_paths),
+        discovered_skill_names=set(context.discovered_skill_names),
+        session_memory_path=context.session_memory_path,
+        durable_memory_dir=context.durable_memory_dir,
+    )
 
 
 @dataclass
