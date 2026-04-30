@@ -42,7 +42,7 @@ uv run morty-code --enable-local-tools
 - 多模态输入会过滤无效 image block，并在 OpenAI-compatible provider 中转换为 `image_url`
 - transcript metadata 会记录 `turn_start` / `turn_finish` 事件
 - tool_result aggregate budget 会把超预算结果落盘为 `.morty/tool-results/<tool_use_id>.txt`，并记录 `content-replacement` metadata
-- normalizer 会清理 `tool_reference`、smoosh `<system-reminder>` sibling，并修复 tool_use/tool_result pairing
+- normalizer 会清理 `tool_reference`、合并 streaming assistant chunk、smoosh `<system-reminder>` sibling，并修复 tool_use/tool_result pairing
 - compact 会写入 system boundary + user summary，query 前只取最后一个 compact boundary 之后的上下文
 - `/compact` 会触发本地 compact 状态迁移，不再把压缩请求转交给模型普通回答
 - compact 摘要会保留用户目标、助手动作、工具调用/结果和关键附件状态

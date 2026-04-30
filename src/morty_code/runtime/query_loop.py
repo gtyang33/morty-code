@@ -80,6 +80,9 @@ class QueryLoop:
                     }
                 )
             api_messages = self.normalizer.normalize_for_api(working_messages, tool_context.tools)
+            normalization_event = self.normalizer.last_report.to_event()
+            if normalization_event is not None:
+                metadata_events.append(normalization_event)
             tool_schemas = self._load_tool_schemas(
                 cache_safe.system_context.get("tool_schemas_json"),
                 metadata_events,

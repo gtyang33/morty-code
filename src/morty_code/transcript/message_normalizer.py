@@ -1,12 +1,34 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass, field
 
 from morty_code.types.messages import Message
 
 
 SYNTHETIC_TOOL_RESULT_PLACEHOLDER = "[Tool result missing due to conversation recovery]"
 TOOL_REFERENCE_REMOVED_PLACEHOLDER = "[Tool references removed - tool search not enabled]"
+NO_CONTENT_MESSAGE = "[No message content]"
+
+
+@dataclass
+class NormalizationReport:
+    """记录 normalizer 的自愈动作，避免坏 transcript 被静默吞掉。"""
+
+    repairs: dict[str, int] = field(default_factory=dict)
+
+    def record(self, repair_type: str, count: int = 1) -> None:
+        if count <= 0:
+            return
+        self.repairs[repair_type] = self.repairs.get(repair_type, 0) + count
+
+    def to_event(self) -> dict[str, object] | None:
+        if not self.repairs:
+            return None
+        return {
+            "type": "message-normalization-repaired",
+            "repairs": dict(sorted(self.repairs.items())),
+        }
 
 
 class MessageNormalizer:
@@ -21,25 +43,33 @@ class MessageNormalizer:
 
     def __init__(self, max_images: int = 20) -> None:
         self.max_images = max_images
+        self.last_report = NormalizationReport()
 
     def normalize_for_api(
         self,
         messages: list[Message],
         available_tools: list[str],
     ) -> list[dict[str, object]]:
+        self.last_report = NormalizationReport()
         reordered = self._reorder_attachments(messages)
         materialized = [self._materialize_attachment(message) for message in reordered]
         filtered = [message for message in materialized if not message.is_virtual]
         normalized = [self._normalize_message_content(message) for message in filtered]
-        non_empty = [message for message in normalized if self._has_api_visible_content(message)]
-        merged = self._merge_adjacent_users(non_empty)
-        smooshed = self._smoosh_system_reminder_siblings(merged)
+        assistant_merged = self._merge_assistant_stream_chunks(normalized)
+        without_orphan_thinking = self._filter_orphaned_thinking_only_assistants(assistant_merged)
+        without_trailing_thinking = self._filter_trailing_thinking_from_last_assistant(without_orphan_thinking)
+        without_thinking_blocks = self._strip_thinking_blocks(without_trailing_thinking)
+        without_whitespace_assistant = self._filter_whitespace_only_assistants(without_thinking_blocks)
+        non_empty_assistant = self._ensure_non_final_assistants_have_content(without_whitespace_assistant)
+        merged_users = self._merge_adjacent_users(non_empty_assistant)
+        smooshed = self._smoosh_system_reminder_siblings(merged_users)
         paired = self._ensure_tool_pairing(smooshed)
-        return [
+        api_messages = [
             self._to_api_message(message)
             for message in paired
             if message.type in {"user", "assistant"}
         ]
+        return self._final_validate_api_messages(api_messages)
 
     def _reorder_attachments(self, messages: list[Message]) -> list[Message]:
         result: list[Message] = []
@@ -80,6 +110,7 @@ class MessageNormalizer:
                     )
                 }
                 merged[-1] = previous
+                self.last_report.record("adjacent-user-merged")
             else:
                 merged.append(message)
         return merged
@@ -89,11 +120,21 @@ class MessageNormalizer:
             return f"{left}\n{right}".strip()
         if isinstance(left, list) and isinstance(right, list):
             return [*left, *right]
+        if isinstance(left, list) and isinstance(right, str):
+            return [*left, *self._text_blocks_from_string(right)]
+        if isinstance(left, str) and isinstance(right, list):
+            return [*self._text_blocks_from_string(left), *right]
         if left is None:
             return right
         if right is None:
             return left
         return f"{left}\n{right}".strip()
+
+    def _text_blocks_from_string(self, value: str) -> list[dict[str, object]]:
+        stripped = value.strip()
+        if not stripped:
+            return []
+        return [{"type": "text", "text": stripped}]
 
     def _to_api_message(self, message: Message) -> dict[str, object]:
         if message.type == "user":
@@ -108,20 +149,15 @@ class MessageNormalizer:
         content = message.payload.get("content")
         normalized = deepcopy(message)
         if isinstance(content, str):
-            normalized.payload = {"content": [{"type": "text", "text": content}]}
+            normalized.payload = {**normalized.payload, "content": [{"type": "text", "text": content}]}
             return normalized
         if isinstance(content, list):
             blocks: list[object] = []
             for block in content:
                 if not isinstance(block, dict):
                     continue
-                # thinking block 不能孤立发送给普通 API，恢复/normalize 时过滤掉。
-                if block.get("type") == "thinking":
-                    continue
-                if block.get("type") == "text" and not str(block.get("text", "")).strip():
-                    continue
                 blocks.append(block)
-            normalized.payload = {"content": blocks}
+            normalized.payload = {**normalized.payload, "content": blocks}
         return normalized
 
     def _normalize_user_content(self, message: Message) -> Message:
@@ -159,13 +195,17 @@ class MessageNormalizer:
                 if not (isinstance(item, dict) and item.get("type") == "tool_reference")
             ]
             if len(filtered) != len(content):
+                self.last_report.record("tool-reference-stripped", len(content) - len(filtered))
                 content = filtered or [{"type": "text", "text": TOOL_REFERENCE_REMOVED_PLACEHOLDER}]
             if updated.get("is_error"):
-                content = [
+                text_only = [
                     item
                     for item in content
                     if isinstance(item, dict) and item.get("type") == "text"
                 ]
+                if len(text_only) != len(content):
+                    self.last_report.record("error-tool-result-non-text-stripped", len(content) - len(text_only))
+                content = text_only
             updated["content"] = content
         return updated
 
@@ -296,6 +336,7 @@ class MessageNormalizer:
                 output.append(message)
                 continue
             kept[target_index] = self._append_to_tool_result(target, system_texts)
+            self.last_report.record("system-reminder-smooshed", len(system_texts))
             output.append(
                 Message(
                     uuid=message.uuid,
@@ -373,6 +414,7 @@ class MessageNormalizer:
                     if block.get("type") == "tool_use":
                         tool_use_id = str(block.get("id", ""))
                         if not tool_use_id or tool_use_id in seen_tool_use_ids:
+                            self.last_report.record("duplicate-tool-use-stripped")
                             continue
                         seen_tool_use_ids.add(tool_use_id)
                         assistant_tool_use_ids.append(tool_use_id)
@@ -395,6 +437,7 @@ class MessageNormalizer:
                         if tool_use_id not in existing_ids
                     ]
                     if missing_ids:
+                        self.last_report.record("missing-tool-result-synthesized", len(missing_ids))
                         synthetic_blocks = [
                             {
                                 "type": "tool_result",
@@ -408,7 +451,11 @@ class MessageNormalizer:
                             next_content = next_message.payload.get("content")
                             if not isinstance(next_content, list):
                                 next_content = [{"type": "text", "text": str(next_content or "")}]
-                            output.append(self._with_content(next_message, [*synthetic_blocks, *next_content]))
+                            filtered_next = self._filter_user_tool_results(
+                                next_content,
+                                allowed_ids=set(assistant_tool_use_ids),
+                            )
+                            output.append(self._with_content(next_message, [*synthetic_blocks, *filtered_next]))
                             index += 2
                             continue
                         output.append(
@@ -427,14 +474,30 @@ class MessageNormalizer:
                 if isinstance(content, list):
                     filtered_content: list[object] = []
                     seen_result_ids: set[str] = set()
+                    stripped_count = 0
                     for block in content:
                         if isinstance(block, dict) and block.get("type") == "tool_result":
                             tool_use_id = str(block.get("tool_use_id", ""))
                             if tool_use_id not in seen_tool_use_ids or tool_use_id in seen_result_ids:
+                                stripped_count += 1
                                 continue
                             seen_result_ids.add(tool_use_id)
                         filtered_content.append(block)
+                    if stripped_count:
+                        self.last_report.record("orphan-or-duplicate-tool-result-stripped", stripped_count)
                     if not filtered_content:
+                        if not output:
+                            output.append(
+                                self._with_content(
+                                    message,
+                                    [
+                                        {
+                                            "type": "text",
+                                            "text": "[Orphaned tool result removed due to conversation resume]",
+                                        }
+                                    ],
+                                )
+                            )
                         index += 1
                         continue
                     if len(filtered_content) != len(content):
@@ -445,6 +508,231 @@ class MessageNormalizer:
             output.append(message)
             index += 1
         return output
+
+    def _filter_user_tool_results(
+        self,
+        content: list[object],
+        allowed_ids: set[str],
+    ) -> list[object]:
+        filtered: list[object] = []
+        seen_result_ids: set[str] = set()
+        stripped_count = 0
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                tool_use_id = str(block.get("tool_use_id", ""))
+                if tool_use_id not in allowed_ids or tool_use_id in seen_result_ids:
+                    stripped_count += 1
+                    continue
+                seen_result_ids.add(tool_use_id)
+            filtered.append(block)
+        if stripped_count:
+            self.last_report.record("orphan-or-duplicate-tool-result-stripped", stripped_count)
+        return filtered
+
+    def _merge_assistant_stream_chunks(self, messages: list[Message]) -> list[Message]:
+        """合并同一 API response 在 streaming 中拆出的 assistant block。
+
+        Claude Code 会按 message.id 回看合并。这里只跨过 tool_result user
+        message，避免把不同用户 turn 的 assistant 错合并。
+        """
+
+        output: list[Message] = []
+        for message in messages:
+            if message.type != "assistant" or not message.payload.get("id"):
+                output.append(message)
+                continue
+            message_id = str(message.payload["id"])
+            merged = False
+            for index in range(len(output) - 1, -1, -1):
+                previous = output[index]
+                if previous.type != "assistant" and not self._is_tool_result_user(previous):
+                    break
+                if previous.type == "assistant" and str(previous.payload.get("id", "")) == message_id:
+                    output[index] = self._merge_assistant_messages(previous, message)
+                    self.last_report.record("assistant-stream-chunk-merged")
+                    merged = True
+                    break
+            if not merged:
+                output.append(message)
+        return output
+
+    def _merge_assistant_messages(self, left: Message, right: Message) -> Message:
+        left_content = left.payload.get("content")
+        right_content = right.payload.get("content")
+        if not isinstance(left_content, list):
+            left_content = [{"type": "text", "text": str(left_content or "")}]
+        if not isinstance(right_content, list):
+            right_content = [{"type": "text", "text": str(right_content or "")}]
+        return self._with_content(left, [*left_content, *right_content])
+
+    def _filter_orphaned_thinking_only_assistants(self, messages: list[Message]) -> list[Message]:
+        ids_with_non_thinking: set[str] = set()
+        for message in messages:
+            if message.type != "assistant":
+                continue
+            content = message.payload.get("content")
+            if not isinstance(content, list):
+                continue
+            if any(
+                isinstance(block, dict)
+                and block.get("type") not in {"thinking", "redacted_thinking"}
+                for block in content
+            ) and message.payload.get("id"):
+                ids_with_non_thinking.add(str(message.payload["id"]))
+
+        output: list[Message] = []
+        for message in messages:
+            if message.type != "assistant":
+                output.append(message)
+                continue
+            content = message.payload.get("content")
+            if not isinstance(content, list) or not content:
+                output.append(message)
+                continue
+            all_thinking = all(
+                isinstance(block, dict)
+                and block.get("type") in {"thinking", "redacted_thinking"}
+                for block in content
+            )
+            if all_thinking and str(message.payload.get("id", "")) not in ids_with_non_thinking:
+                self.last_report.record("orphan-thinking-assistant-stripped")
+                continue
+            output.append(message)
+        return output
+
+    def _filter_trailing_thinking_from_last_assistant(self, messages: list[Message]) -> list[Message]:
+        if not messages or messages[-1].type != "assistant":
+            return messages
+        content = messages[-1].payload.get("content")
+        if not isinstance(content, list) or not content:
+            return messages
+        last_valid_index = len(content) - 1
+        while last_valid_index >= 0:
+            block = content[last_valid_index]
+            if not isinstance(block, dict) or block.get("type") not in {"thinking", "redacted_thinking"}:
+                break
+            last_valid_index -= 1
+        removed = len(content) - last_valid_index - 1
+        if not removed:
+            return messages
+        replacement = (
+            [{"type": "text", "text": NO_CONTENT_MESSAGE}]
+            if last_valid_index < 0
+            else content[: last_valid_index + 1]
+        )
+        result = list(messages)
+        result[-1] = self._with_content(messages[-1], replacement)
+        self.last_report.record("trailing-thinking-stripped", removed)
+        return result
+
+    def _filter_whitespace_only_assistants(self, messages: list[Message]) -> list[Message]:
+        output: list[Message] = []
+        removed = 0
+        for message in messages:
+            if message.type != "assistant":
+                output.append(message)
+                continue
+            content = message.payload.get("content")
+            if not isinstance(content, list) or not content:
+                output.append(message)
+                continue
+            if all(
+                isinstance(block, dict)
+                and block.get("type") == "text"
+                and not str(block.get("text", "")).strip()
+                for block in content
+            ):
+                removed += 1
+                continue
+            output.append(message)
+        if removed:
+            self.last_report.record("whitespace-only-assistant-stripped", removed)
+            return self._merge_adjacent_users(output)
+        return messages
+
+    def _strip_thinking_blocks(self, messages: list[Message]) -> list[Message]:
+        output: list[Message] = []
+        for message in messages:
+            if message.type != "assistant":
+                output.append(message)
+                continue
+            content = message.payload.get("content")
+            if not isinstance(content, list):
+                output.append(message)
+                continue
+            filtered = [
+                block
+                for block in content
+                if not (
+                    isinstance(block, dict)
+                    and block.get("type") in {"thinking", "redacted_thinking"}
+                )
+            ]
+            if len(filtered) != len(content):
+                self.last_report.record("thinking-block-stripped", len(content) - len(filtered))
+                output.append(self._with_content(message, filtered))
+                continue
+            output.append(message)
+        return output
+
+    def _ensure_non_final_assistants_have_content(self, messages: list[Message]) -> list[Message]:
+        output: list[Message] = []
+        for index, message in enumerate(messages):
+            if message.type != "assistant" or index == len(messages) - 1:
+                output.append(message)
+                continue
+            content = message.payload.get("content")
+            if isinstance(content, list) and not content:
+                output.append(self._with_content(message, [{"type": "text", "text": NO_CONTENT_MESSAGE}]))
+                self.last_report.record("empty-non-final-assistant-filled")
+                continue
+            output.append(message)
+        return output
+
+    def _final_validate_api_messages(
+        self,
+        messages: list[dict[str, object]],
+    ) -> list[dict[str, object]]:
+        """最后一道 API shape 防线：只保留可见消息并消除相邻同 role。"""
+
+        output: list[dict[str, object]] = []
+        for message in messages:
+            role = message.get("role")
+            if role not in {"user", "assistant"}:
+                self.last_report.record("non-api-role-stripped")
+                continue
+            if not self._api_message_has_content(message):
+                self.last_report.record("empty-api-message-stripped")
+                continue
+            if output and output[-1].get("role") == role:
+                output[-1] = self._merge_api_messages(output[-1], message)
+                self.last_report.record("final-adjacent-role-merged")
+                continue
+            output.append(message)
+        return output
+
+    def _api_message_has_content(self, message: dict[str, object]) -> bool:
+        content = message.get("content")
+        if isinstance(content, str):
+            return bool(content.strip())
+        if isinstance(content, list):
+            return bool(content)
+        return content is not None
+
+    def _merge_api_messages(
+        self,
+        left: dict[str, object],
+        right: dict[str, object],
+    ) -> dict[str, object]:
+        if left.get("role") == "assistant":
+            left_content = left.get("content")
+            right_content = right.get("content")
+            if not isinstance(left_content, list):
+                left_content = [{"type": "text", "text": str(left_content or "")}]
+            if not isinstance(right_content, list):
+                right_content = [{"type": "text", "text": str(right_content or "")}]
+            return {**left, "content": [*left_content, *right_content]}
+        return {**left, "content": self._merge_user_content(left.get("content"), right.get("content"))}
 
     def _with_content(self, message: Message, content: object) -> Message:
         return Message(
