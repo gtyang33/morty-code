@@ -36,9 +36,16 @@ Claude Code 的 `AgentTool` 不是普通函数工具，而是一个 agent runtim
 - 在本地工具开启时自动注册 `spawn_agent`，并禁止第一版递归 spawn。
 - 子代理失败返回结构化 `status` / metadata，不抛到父 query loop 之外。
 
+第二轮补充：
+
+- 每个子代理有独立 sidechain transcript：`.morty/subagents/<session_id>/<agent_id>.jsonl`。
+- `spawn_agent` 支持 `run_in_background=true`，返回 `async_launched`、`task_id`、`output_file`。
+- 后台任务状态写入 `.morty/tasks/<task_id>.json`，包含 running/completed/failed、output、error、transcript_path。
+- 后台线程启动时 clone 父 `ToolUseContext` 和 cache-safe 参数，避免后台任务修改父线程工具列表。
+
 暂不实现：
 
-- 后台任务、progress UI、kill/resume。
+- progress UI、kill/resume。
 - worktree/remote isolation。
 - MCP 服务器前置条件和 agent 专属 MCP。
 - teammate / mailbox / SendMessage。

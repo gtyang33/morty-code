@@ -149,6 +149,8 @@ def main() -> None:
             "session_id": transcript_store.session_id,
             "transcript_path": str(transcript_store.path),
             "plans_dir": ".morty/plans",
+            "subagent_transcripts_dir": ".morty/subagents",
+            "subagent_tasks_dir": ".morty/tasks",
             "tool_schemas": tool_registry.api_tool_schemas() if tool_registry is not None else [],
             "enable_prompt_caching": os.environ.get("DISABLE_PROMPT_CACHING") != "1",
             "send_cache_control": os.environ.get("MORTY_SEND_CACHE_CONTROL") == "1",
@@ -168,6 +170,8 @@ def main() -> None:
                     "session_id": transcript_store.session_id,
                     "transcript_path": str(transcript_store.path),
                     "plans_dir": ".morty/plans",
+                    "subagent_transcripts_dir": ".morty/subagents",
+                    "subagent_tasks_dir": ".morty/tasks",
                 }
             )
         )

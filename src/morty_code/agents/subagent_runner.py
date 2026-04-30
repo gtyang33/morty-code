@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from uuid import uuid4
 
 from morty_code.agents.agent_definitions import AgentDefinition, AgentRegistry
 from morty_code.agents.forked_agent import ForkedAgentRunner
 from morty_code.tools.tool_registry import ToolRegistry
+from morty_code.transcript.transcript_store import TranscriptStore
 from morty_code.types.messages import Message
 from morty_code.types.runtime_state import CacheSafeParams, ToolUseContext
 
@@ -15,9 +17,11 @@ from morty_code.types.runtime_state import CacheSafeParams, ToolUseContext
 @dataclass
 class SubagentRunResult:
     status: str
+    agent_id: str
     agent_type: str
     output: str
     message_count: int
+    transcript_path: str | None
     metadata_events: list[dict[str, object]]
 
 
@@ -46,10 +50,14 @@ class SubagentRunner:
         parent_context: ToolUseContext,
         parent_cache_safe: CacheSafeParams,
         max_turns: int | None = None,
+        agent_id: str | None = None,
+        record_transcript: bool = True,
     ) -> SubagentRunResult:
         definition = self._resolve_agent(agent_type)
+        resolved_agent_id = agent_id or str(uuid4())
         allowed_tools = self._resolve_allowed_tools(definition, parent_context.tools)
         agent_context = parent_context
+        transcript_store = self._make_transcript_store(parent_context, resolved_agent_id)
         # ForkedAgentRunner 内部会 clone context；这里先把工具和 schema 放到父 context
         # 的临时副本输入中，由 clone 复制成子代理自己的隔离状态。
         original_tools = list(parent_context.tools)
@@ -58,20 +66,36 @@ class SubagentRunner:
         try:
             parent_context.tools = allowed_tools
             parent_context.app_state["tool_schemas"] = self.tool_registry.api_tool_schemas(set(allowed_tools))
+            await self._append_lifecycle_event(
+                transcript_store,
+                {
+                    "type": "subagent_start",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "agent_id": resolved_agent_id,
+                    "agent_type": definition.agent_type,
+                    "prompt_chars": len(prompt),
+                    "tool_count": len(allowed_tools),
+                    "max_turns": max_turns or definition.max_turns,
+                },
+                record_transcript,
+            )
             agent_cache_safe = self._build_cache_safe(
                 definition=definition,
                 parent_cache_safe=parent_cache_safe,
                 allowed_tools=allowed_tools,
             )
             prompt_message = self._prompt_message(prompt, definition)
-            runner = ForkedAgentRunner(self.query_loop)
+            runner = ForkedAgentRunner(
+                self.query_loop,
+                transcript_store=transcript_store if record_transcript else None,
+            )
             result = await runner.run_with_result(
                 cache_safe=agent_cache_safe,
                 prompt_messages=[prompt_message],
                 tool_context=agent_context,
                 max_turns=max_turns or definition.max_turns,
                 fork_label=f"subagent:{definition.agent_type}",
-                skip_transcript=True,
+                skip_transcript=not record_transcript,
                 skip_cache_write=True,
             )
         finally:
@@ -87,18 +111,35 @@ class SubagentRunner:
             {
                 "type": "subagent_result",
                 "timestamp": datetime.utcnow().isoformat(),
+                "agent_id": resolved_agent_id,
                 "agent_type": definition.agent_type,
                 "status": status,
                 "message_count": len(result.messages),
                 "tool_count": len(allowed_tools),
+                "transcript_path": str(transcript_store.path) if transcript_store else None,
             },
             *result.metadata_events,
         ]
+        await self._append_lifecycle_event(
+            transcript_store,
+            {
+                "type": "subagent_finish",
+                "timestamp": datetime.utcnow().isoformat(),
+                "agent_id": resolved_agent_id,
+                "agent_type": definition.agent_type,
+                "status": status,
+                "message_count": len(result.messages),
+                "output_chars": len(output),
+            },
+            record_transcript,
+        )
         return SubagentRunResult(
             status=status,
+            agent_id=resolved_agent_id,
             agent_type=definition.agent_type,
             output=output,
             message_count=len(result.messages),
+            transcript_path=str(transcript_store.path) if transcript_store else None,
             metadata_events=metadata_events,
         )
 
@@ -155,6 +196,26 @@ class SubagentRunner:
             is_meta=True,
             origin={"source": "subagent", "agent_type": definition.agent_type},
         )
+
+    def _make_transcript_store(
+        self,
+        parent_context: ToolUseContext,
+        agent_id: str,
+    ) -> TranscriptStore | None:
+        session_id = str(parent_context.app_state.get("session_id") or "default")
+        root = Path(str(parent_context.app_state.get("subagent_transcripts_dir") or ".morty/subagents"))
+        path = root / session_id / f"{agent_id}.jsonl"
+        return TranscriptStore(path, agent_id)
+
+    async def _append_lifecycle_event(
+        self,
+        transcript_store: TranscriptStore | None,
+        event: dict[str, object],
+        enabled: bool,
+    ) -> None:
+        if not enabled or transcript_store is None:
+            return
+        await transcript_store.append_event(event)
 
     def _extract_final_output(self, messages: list[Message]) -> str:
         for message in reversed(messages):
