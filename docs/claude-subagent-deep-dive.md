@@ -49,6 +49,12 @@ Claude Code 的 `AgentTool` 不是普通函数工具，而是一个 agent runtim
 - 新增 `/tasks` 本地命令列出任务，`/tasks <task_id>` 查看单个任务详情。
 - `SubagentTaskRegistry` 可以从磁盘恢复 `.morty/tasks/*.json`，CLI 重启后仍能查询历史任务摘要。
 
+第四轮补充：
+
+- CLI 正常退出时扫描 `.morty/tasks`，把仍在 `running` 的后台子代理标记为 `interrupted`。
+- `task_output(block=true)` 看到 `interrupted` 会立即返回，不再对旧任务等待到 timeout。
+- 这只覆盖正常退出；SIGKILL、断电、进程崩溃后的孤儿 running 任务仍需要后续 reaper/resume。
+
 暂不实现：
 
 - progress UI、kill/resume。

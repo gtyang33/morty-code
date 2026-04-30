@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 
-TaskStatus = Literal["running", "completed", "failed"]
+TaskStatus = Literal["running", "completed", "failed", "interrupted"]
 
 
 @dataclass
@@ -117,6 +117,23 @@ class SubagentTaskRegistry:
                 f"{task.description}  output={task.output_file}"
             )
         return "\n".join(lines)
+
+    def interrupt_running(self, reason: str = "parent process exited") -> int:
+        """把仍在 running 的任务标记为 interrupted。
+
+        进程内后台线程无法在父进程退出后继续执行；退出前显式标记，避免
+        重启后 `task_output(block=true)` 对旧任务一直等待到 timeout。
+        """
+
+        interrupted = 0
+        for task in self.list():
+            if task.status != "running":
+                continue
+            task.status = "interrupted"
+            task.error = reason
+            self.update(task)
+            interrupted += 1
+        return interrupted
 
 
 _REGISTRY: SubagentTaskRegistry | None = None

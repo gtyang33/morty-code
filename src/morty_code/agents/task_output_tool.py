@@ -41,6 +41,8 @@ def register_task_output_tool(registry: ToolRegistry) -> None:
             return {"retrieval_status": "not_found", "task": None}
         if completed.status == "running":
             return _format_task(completed, retrieval_status="timeout")
+        if completed.status == "interrupted":
+            return _format_task(completed, retrieval_status="interrupted")
         return _format_task(completed, retrieval_status="success")
 
     registry.register(
@@ -97,6 +99,8 @@ def _format_task(task: SubagentTask, retrieval_status: str) -> dict[str, object]
 def _status_for(task: SubagentTask) -> str:
     if task.status == "running":
         return "not_ready"
+    if task.status == "interrupted":
+        return "interrupted"
     return "success"
 
 

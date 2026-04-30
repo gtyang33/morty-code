@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import atexit
 import builtins
 import json
 import os
@@ -22,6 +23,7 @@ from morty_code.compact.compact_agent import CompactAgent
 from morty_code.input.handle_input import InputDispatcher
 from morty_code.input.process_user_input import UserInputProcessor
 from morty_code.memory.memory_extractor import MemoryExtractor
+from morty_code.agents.task_registry import get_subagent_task_registry
 from morty_code.prompt.prompt_builder import PromptBuilder
 from morty_code.prompt.prompt_sections import PromptSectionRegistry
 from morty_code.runtime.query_engine import QueryEngine
@@ -161,6 +163,10 @@ def main() -> None:
         session_memory_path=".morty/session_memory.md",
         durable_memory_dir=".morty/memory",
     )
+    atexit.register(
+        _mark_running_subagents_interrupted,
+        str(tool_context.app_state["subagent_tasks_dir"]),
+    )
     if args.session:
         restored = asyncio.run(
             engine.restore_from_transcript(
@@ -218,6 +224,15 @@ def _print_cli_message(message: Message) -> None:
     rendered = _render_cli_message(message)
     if rendered:
         print(rendered)
+
+
+def _mark_running_subagents_interrupted(task_dir: str) -> None:
+    """CLI 正常退出时标记未完成后台子代理。
+
+    这里只处理正常解释器退出；SIGKILL、机器断电等场景需要后续 resume/reaper。
+    """
+
+    get_subagent_task_registry(task_dir).interrupt_running()
 
 
 def _render_cli_message(message: Message) -> str:
