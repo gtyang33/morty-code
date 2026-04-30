@@ -14,6 +14,7 @@ class SessionRestore:
     ) -> dict[str, object]:
         read_file_state: dict[str, FileViewState] = {}
         content_replacement_state = ContentReplacementState()
+        plan_state: dict[str, object] = {}
         for message in messages:
             if message.type != "attachment":
                 if message.type == "user":
@@ -27,6 +28,17 @@ class SessionRestore:
                         content=str(message.payload.get("content", "")),
                         is_partial_view=bool(message.payload.get("truncated", False)),
                     )
+            if message.payload.get("attachment_type") == "plan_mode":
+                plan_state["plan_mode"] = True
+                if message.payload.get("plan_file_path"):
+                    plan_state["plan_file_path"] = str(message.payload.get("plan_file_path"))
+            if message.payload.get("attachment_type") in {"plan_mode_exit", "approved_plan"}:
+                plan_state["plan_mode"] = False
+                if message.payload.get("plan_file_path"):
+                    plan_state["plan_file_path"] = str(message.payload.get("plan_file_path"))
+                approved_plan = message.payload.get("approved_plan") or message.payload.get("content")
+                if approved_plan:
+                    plan_state["approved_plan"] = str(approved_plan)
         return {
             "messages": messages,
             "metadata": metadata,
@@ -34,7 +46,13 @@ class SessionRestore:
                 tools=[],
                 model=str(metadata.get("model", "echo-model")),
                 permission_mode=str(metadata.get("permission_mode", "default")),
-                app_state={"cwd": metadata.get("cwd", ".")},
+                app_state={
+                    "cwd": metadata.get("cwd", "."),
+                    "session_id": metadata.get("session_id", "default"),
+                    "transcript_path": metadata.get("transcript_path", ""),
+                    "plans_dir": metadata.get("plans_dir", ".morty/plans"),
+                    **plan_state,
+                },
                 read_file_state=read_file_state,
                 content_replacement_state=content_replacement_state,
             ),

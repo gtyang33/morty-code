@@ -38,6 +38,7 @@ uv run morty-code --enable-local-tools
 - cwd 内只读本地工具：`read_file`、`list_dir`
 - OpenAI-compatible provider 会发送本地工具 schema，并把 `tool_calls` 转成内部 `tool_use`
 - 本地 slash command：`/status`、`/tools`、`/memory-index`
+- plan mode 闭环：`/plan` 创建计划文件、`/plan-save` 写计划、`/plan-show` 查看、`/auto` 批准后退出
 - 增量附件：`date_change`、`plan_mode`、`plan_mode_exit`、`hook_additional_context`
 - 多模态输入会过滤无效 image block，并在 OpenAI-compatible provider 中转换为 `image_url`
 - transcript metadata 会记录 `turn_start` / `turn_finish` 事件

@@ -7,6 +7,7 @@ from morty_code.attachments.attachment_manager import AttachmentManager
 from morty_code.input.commands import CommandRegistry, CommandSpec
 from morty_code.input.slash_commands import SlashCommandProcessor, parse_slash_command
 from morty_code.memory.durable_memory import DurableMemoryStore
+from morty_code.plan import PlanStore
 from morty_code.types.messages import Attachment, Message
 from morty_code.types.runtime_state import ProcessedUserInput, QueuedCommand, ToolUseContext
 
@@ -158,9 +159,25 @@ class UserInputProcessor:
         registry.register(
             CommandSpec(
                 name="auto",
-                description="退出 plan mode，回到自动执行",
+                description="批准当前计划并退出 plan mode",
                 kind="local",
                 handler=self._handle_auto_mode,
+            )
+        )
+        registry.register(
+            CommandSpec(
+                name="plan-save",
+                description="写入当前 session 的计划文件",
+                kind="local",
+                handler=self._handle_plan_save,
+            )
+        )
+        registry.register(
+            CommandSpec(
+                name="plan-show",
+                description="显示当前 session 的计划文件",
+                kind="local",
+                handler=self._handle_plan_show,
             )
         )
         registry.register(
@@ -214,6 +231,8 @@ class UserInputProcessor:
                     f"prompt_cache_calls: {tool_context.prompt_cache_state.call_count}",
                     f"prompt_cache_read_tokens: {tool_context.prompt_cache_state.cache_read_input_tokens}",
                     f"prompt_cache_creation_tokens: {tool_context.prompt_cache_state.cache_creation_input_tokens}",
+                    f"plan_mode: {bool(tool_context.app_state.get('plan_mode', False))}",
+                    f"plan_file_path: {tool_context.app_state.get('plan_file_path', 'none')}",
                     f"session_memory_path: {tool_context.session_memory_path or 'none'}",
                     f"durable_memory_dir: {tool_context.durable_memory_dir or 'none'}",
                     f"transcript_path: {tool_context.app_state.get('transcript_path', 'unknown')}",
@@ -255,19 +274,68 @@ class UserInputProcessor:
         tool_context = context["tool_context"]
         if not isinstance(tool_context, ToolUseContext):
             return {"mode": "local", "content": "Tool context unavailable."}
+        plan_store = PlanStore.from_app_state(tool_context.app_state)
+        plan_path = plan_store.ensure()
+        if args.strip():
+            plan_store.write(args.strip())
         tool_context.app_state["plan_mode"] = True
+        tool_context.app_state["plan_file_path"] = str(plan_path)
+        tool_context.app_state["approved_plan"] = None
         tool_context.app_state["last_plan_mode_attachment_turn"] = 0
-        return {"mode": "local", "content": "Plan mode enabled."}
+        return {
+            "mode": "local",
+            "content": (
+                "Plan mode enabled.\n"
+                f"Plan file: {plan_path}\n"
+                "Use /plan-save <markdown> to write the plan, then /auto to approve and exit."
+            ),
+        }
+
+    async def _handle_plan_save(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        tool_context = context["tool_context"]
+        if not isinstance(tool_context, ToolUseContext):
+            return {"mode": "local", "content": "Tool context unavailable."}
+        content = args.strip()
+        if not content:
+            return {"mode": "local", "content": "Usage: /plan-save <markdown plan>"}
+        plan_store = PlanStore.from_app_state(tool_context.app_state)
+        plan_path = plan_store.write(content)
+        tool_context.app_state["plan_file_path"] = str(plan_path)
+        return {"mode": "local", "content": f"Plan saved to {plan_path}."}
+
+    async def _handle_plan_show(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        tool_context = context["tool_context"]
+        if not isinstance(tool_context, ToolUseContext):
+            return {"mode": "local", "content": "Tool context unavailable."}
+        plan_store = PlanStore.from_app_state(tool_context.app_state)
+        content = plan_store.read().strip()
+        if not content:
+            return {"mode": "local", "content": f"No plan yet. Plan file: {plan_store.path}"}
+        return {"mode": "local", "content": f"Plan file: {plan_store.path}\n\n{content}"}
 
     async def _handle_auto_mode(self, args: str, context: dict[str, object]) -> dict[str, object]:
         tool_context = context["tool_context"]
         if not isinstance(tool_context, ToolUseContext):
             return {"mode": "local", "content": "Tool context unavailable."}
         was_plan_mode = bool(tool_context.app_state.get("plan_mode", False))
+        if was_plan_mode:
+            plan_store = PlanStore.from_app_state(tool_context.app_state)
+            plan = plan_store.read().strip()
+            if not plan:
+                return {
+                    "mode": "local",
+                    "content": (
+                        "Cannot exit plan mode: current plan file is empty.\n"
+                        f"Plan file: {plan_store.path}\n"
+                        "Use /plan-save <markdown> first."
+                    ),
+                }
+            tool_context.app_state["approved_plan"] = plan
+            tool_context.app_state["plan_file_path"] = str(plan_store.path)
         tool_context.app_state["plan_mode"] = False
         if was_plan_mode:
             tool_context.app_state["needs_plan_mode_exit_attachment"] = True
-        return {"mode": "local", "content": "Auto mode enabled."}
+        return {"mode": "local", "content": "Plan approved. Auto mode enabled."}
 
     async def _handle_compact(self, args: str, context: dict[str, object]) -> dict[str, object]:
         return {

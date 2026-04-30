@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from morty_code.memory.relevant_memory import RelevantMemoryFinder
+from morty_code.plan import PlanStore
 from morty_code.types.messages import Attachment, AttachmentPhase, Message
 from morty_code.types.runtime_state import FileViewState, QueuedCommand, ToolUseContext
 
@@ -36,6 +37,7 @@ class AttachmentManager:
         messages: list[Message],
     ) -> list[Attachment]:
         attachments: list[Attachment] = []
+        attachments.extend(self._collect_input_mode_context(context))
         for match in AT_MENTION_RE.finditer(input_text):
             attachments.append(self._build_at_mentioned_attachment(match.group(1), context))
         if self.relevant_memory_finder is not None:
@@ -47,6 +49,28 @@ class AttachmentManager:
             phase="input",
             allow_seen_stable_keys=True,
         )
+
+    def _collect_input_mode_context(self, context: ToolUseContext) -> list[Attachment]:
+        if context.app_state.pop("needs_plan_mode_exit_attachment", False):
+            return [self._build_plan_mode_exit_attachment(context, phase="input")]
+        if not context.app_state.get("plan_mode"):
+            return []
+        plan_store = PlanStore.from_app_state(context.app_state)
+        plan_path = plan_store.ensure()
+        context.app_state["plan_file_path"] = str(plan_path)
+        return [
+            Attachment(
+                type="plan_mode",
+                payload={
+                    "content": "Plan mode is active. Explore and update the plan file only; do not implement until /auto approves the plan.",
+                    "plan_file_path": str(plan_path),
+                    "plan": plan_store.read().strip(),
+                },
+                is_meta=True,
+                phase="input",
+                stable_key="input:plan_mode",
+            )
+        ]
 
     async def collect_post_iteration(
         self,
@@ -129,16 +153,35 @@ class AttachmentManager:
                     )
                 )
         if context.app_state.get("plan_mode"):
+            plan_store = PlanStore.from_app_state(context.app_state)
+            plan_path = plan_store.ensure()
             attachments.append(
                 Attachment(
                     type="plan_mode",
                     payload={
                         "content": "Plan mode is active after compaction. Do not modify files until the plan is approved.",
+                        "plan_file_path": str(plan_path),
+                        "plan": plan_store.read().strip(),
                         "source": "post_compact_reinject",
                     },
                     is_meta=True,
                     phase="reinjection",
                     stable_key="reinjection:plan_mode",
+                )
+            )
+        approved_plan = context.app_state.get("approved_plan")
+        if approved_plan:
+            attachments.append(
+                Attachment(
+                    type="approved_plan",
+                    payload={
+                        "content": str(approved_plan),
+                        "plan_file_path": str(context.app_state.get("plan_file_path", "")),
+                        "source": "post_compact_reinject",
+                    },
+                    is_meta=True,
+                    phase="reinjection",
+                    stable_key="reinjection:approved_plan",
                 )
             )
         if context.discovered_skill_names:
@@ -289,25 +332,24 @@ class AttachmentManager:
         plan_mode = bool(context.app_state.get("plan_mode", False))
         if not plan_mode:
             if context.app_state.pop("needs_plan_mode_exit_attachment", False):
-                return [
-                    Attachment(
-                        type="plan_mode_exit",
-                        payload={"content": "Plan mode has been exited. Implementation is allowed."},
-                        is_meta=True,
-                        phase="delta",
-                        stable_key=f"delta:plan_mode_exit:{turn_index}",
-                    )
-                ]
+                attachment = self._build_plan_mode_exit_attachment(context, phase="delta")
+                attachment.stable_key = f"delta:plan_mode_exit:{turn_index}"
+                return [attachment]
             return []
         last_sent = int(context.app_state.get("last_plan_mode_attachment_turn", 0))
         if last_sent and turn_index - last_sent < TURNS_BETWEEN_MODE_ATTACHMENTS:
             return []
         context.app_state["last_plan_mode_attachment_turn"] = turn_index
+        plan_store = PlanStore.from_app_state(context.app_state)
+        plan_path = plan_store.ensure()
+        context.app_state["plan_file_path"] = str(plan_path)
         return [
             Attachment(
                 type="plan_mode",
                 payload={
                     "content": "Plan mode is active. Do not modify files until the plan is approved.",
+                    "plan_file_path": str(plan_path),
+                    "plan": plan_store.read().strip(),
                     "turn_index": turn_index,
                 },
                 is_meta=True,
@@ -315,6 +357,23 @@ class AttachmentManager:
                 stable_key="delta:plan_mode",
             )
         ]
+
+    def _build_plan_mode_exit_attachment(
+        self,
+        context: ToolUseContext,
+        phase: AttachmentPhase,
+    ) -> Attachment:
+        return Attachment(
+            type="plan_mode_exit",
+            payload={
+                "content": "Plan mode has been exited. The plan is approved; implementation is allowed.",
+                "plan_file_path": str(context.app_state.get("plan_file_path", "")),
+                "approved_plan": str(context.app_state.get("approved_plan") or ""),
+            },
+            is_meta=True,
+            phase=phase,
+            stable_key=f"{phase}:plan_mode_exit",
+        )
 
     def _collect_hook_context(self, context: ToolUseContext) -> list[Attachment]:
         queue = context.app_state.get("hook_context_queue")

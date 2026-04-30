@@ -64,7 +64,9 @@ def main() -> None:
         permission_mode="default",
         app_state={
             "cwd": ".",
+            "session_id": transcript_store.session_id,
             "transcript_path": str(transcript_store.path),
+            "plans_dir": ".morty/plans",
             "tool_schemas": tool_registry.api_tool_schemas() if tool_registry is not None else [],
             "enable_prompt_caching": os.environ.get("DISABLE_PROMPT_CACHING") != "1",
             "send_cache_control": os.environ.get("MORTY_SEND_CACHE_CONTROL") == "1",
@@ -76,13 +78,23 @@ def main() -> None:
         durable_memory_dir=".morty/memory",
     )
     if args.session:
-        restored = asyncio.run(engine.restore_from_transcript({"cwd": ".", "model": args.model}))
+        restored = asyncio.run(
+            engine.restore_from_transcript(
+                {
+                    "cwd": ".",
+                    "model": args.model,
+                    "session_id": transcript_store.session_id,
+                    "transcript_path": str(transcript_store.path),
+                    "plans_dir": ".morty/plans",
+                }
+            )
+        )
         tool_context = restored["tool_context"]
         print(f"restored {len(restored['messages'])} messages from {args.session}")
 
     if args.once is not None:
         for message in engine.submit_message_sync(args.once, tool_context):
-            print(_render_cli_message(message))
+            _print_cli_message(message)
         return
 
     while True:
@@ -93,7 +105,13 @@ def main() -> None:
             continue
         messages = engine.submit_message_sync(raw, tool_context)
         for message in messages:
-            print(_render_cli_message(message))
+            _print_cli_message(message)
+
+
+def _print_cli_message(message: Message) -> None:
+    rendered = _render_cli_message(message)
+    if rendered:
+        print(rendered)
 
 
 def _render_cli_message(message: Message) -> str:
@@ -110,6 +128,8 @@ def _render_cli_message(message: Message) -> str:
     if message.type == "user":
         return f"[user]\n{rendered}".strip()
     if message.type == "attachment":
+        if message.is_meta:
+            return ""
         attachment_type = message.payload.get("attachment_type", "unknown")
         return f"[attachment:{attachment_type}]\n{rendered}".strip()
     return f"[{message.type}]\n{rendered}".strip()

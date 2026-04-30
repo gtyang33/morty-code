@@ -291,6 +291,7 @@ class MessageNormalizer:
             "date_change",
             "plan_mode",
             "plan_mode_exit",
+            "approved_plan",
             "hook_additional_context",
         }:
             return "\n".join(f"{key}: {value}" for key, value in payload.items())
