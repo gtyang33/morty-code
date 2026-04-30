@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import builtins
 import os
 from dataclasses import asdict
 from pathlib import Path
@@ -84,7 +85,7 @@ def main() -> None:
         return
 
     while True:
-        raw = input("morty-code> ").strip()
+        raw = builtins.input("morty-code> ").strip()
         if raw in {"/exit", "/quit"}:
             return
         if not raw:
