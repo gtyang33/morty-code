@@ -86,6 +86,8 @@ class ProcessedUserInput:
     effort: str | None = None
     next_input: str | None = None
     submit_next_input: bool = False
+    # slash command 可以请求本地 compact，而不是把“请压缩”再交给模型回答。
+    trigger_compact: bool = False
 
 
 @dataclass

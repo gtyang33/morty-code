@@ -52,6 +52,21 @@ class SlashCommandProcessor:
 
         result = await command.handler(parsed.args, context)
         mode = str(result.get("mode", "prompt"))
+        if mode == "compact":
+            message = Message(
+                uuid=str(uuid4()),
+                timestamp=datetime.utcnow().isoformat(),
+                type="system",
+                payload={
+                    "subtype": "local_command",
+                    "content": str(result.get("content", "Compaction requested.")),
+                },
+            )
+            return ProcessedUserInput(
+                messages=[message],
+                should_query=False,
+                trigger_compact=True,
+            )
         if mode == "local":
             message = Message(
                 uuid=str(uuid4()),

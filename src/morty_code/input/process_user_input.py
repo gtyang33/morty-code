@@ -269,8 +269,8 @@ class UserInputProcessor:
 
     async def _handle_compact(self, args: str, context: dict[str, object]) -> dict[str, object]:
         return {
-            "mode": "prompt",
-            "content": "Please compact the current conversation and preserve active constraints.",
+            "mode": "compact",
+            "content": "Conversation compaction requested.",
         }
 
     async def _handle_memory(self, args: str, context: dict[str, object]) -> dict[str, object]:

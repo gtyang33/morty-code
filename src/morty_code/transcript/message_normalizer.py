@@ -229,10 +229,24 @@ class MessageNormalizer:
         if attachment_type == "command_permissions":
             return (
                 f"command: {payload.get('command', '')}\n"
-                f"allowed_tools: {payload.get('allowed_tools', [])}"
+                f"allowed_tools: {payload.get('allowed_tools', [])}\n"
+                f"tool_schema_count: {payload.get('tool_schema_count', '')}"
             ).strip()
         if attachment_type == "session_memory":
             return f"path: {payload.get('path', '')}\n{payload.get('content', '')}".strip()
+        if attachment_type == "skill_discovery":
+            skills = payload.get("skills", [])
+            if isinstance(skills, list):
+                return "discovered_skills:\n" + "\n".join(f"- {skill}" for skill in skills)
+            return f"discovered_skills: {skills}"
+        if attachment_type == "content_replacement_state":
+            replacement_ids = payload.get("replacement_ids", [])
+            if isinstance(replacement_ids, list):
+                return (
+                    "large tool results already replaced:\n"
+                    + "\n".join(f"- {tool_use_id}" for tool_use_id in replacement_ids)
+                )
+            return f"large tool results already replaced: {replacement_ids}"
         if attachment_type in {
             "date_change",
             "plan_mode",

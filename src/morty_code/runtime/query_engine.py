@@ -71,6 +71,7 @@ class QueryEngine:
 
         new_messages: list[Message] = []
         should_query = False
+        should_compact = False
         index = 0
         while queued_commands:
             command = queued_commands.pop(0)
@@ -83,6 +84,7 @@ class QueryEngine:
             new_messages.extend(processed.messages)
             if index == 0:
                 should_query = processed.should_query
+            should_compact = should_compact or processed.trigger_compact
             if processed.allowed_tools is not None:
                 tool_context.tools = processed.allowed_tools
             if processed.model is not None:
@@ -103,6 +105,19 @@ class QueryEngine:
         self.messages.extend(new_messages)
         if new_messages:
             await self.transcript_store.append_messages(new_messages)
+        if should_compact:
+            compact_messages = await self._maybe_compact(tool_context, force=True, trigger="manual")
+            if compact_messages:
+                await self.transcript_store.append_event(
+                    {
+                        "type": "turn_finish",
+                        "queried_model": False,
+                        "input_message_count": len(new_messages),
+                        "output_message_count": len(compact_messages),
+                        "message_count_after": len(self.messages),
+                    }
+                )
+                return [*new_messages, *compact_messages]
         if not should_query:
             await self.transcript_store.append_event(
                 {
@@ -170,27 +185,37 @@ class QueryEngine:
         self.transcript_store._last_parent_uuid = loaded.last_parent_uuid
         return restored
 
-    async def _maybe_compact(self, tool_context: ToolUseContext) -> None:
+    async def _maybe_compact(
+        self,
+        tool_context: ToolUseContext,
+        force: bool = False,
+        trigger: str = "auto",
+    ) -> list[Message]:
         approximate_tokens = sum(len(str(message.payload)) for message in self.messages)
-        if not self.auto_compact_decider.should_compact(approximate_tokens):
-            return
+        if not force and not self.auto_compact_decider.should_compact(approximate_tokens):
+            return []
         try:
             summary_messages, messages_to_keep = await self.compact_agent.compact_messages(
-                self.messages
+                self.messages,
+                trigger=trigger,
             )
             reinjected = build_reinjection_attachments(tool_context)
             rebuilt = rebuild_post_compact_messages(summary_messages, messages_to_keep, reinjected)
             self.messages = rebuilt
-            await self.transcript_store.append_messages([*summary_messages, *reinjected])
+            compact_messages = [*summary_messages, *reinjected]
+            await self.transcript_store.append_messages(compact_messages)
             await self.transcript_store.append_event(
                 {
                     "type": "compact",
+                    "trigger": trigger,
                     "approximate_tokens": approximate_tokens,
                     "summary_count": len(summary_messages),
+                    "messages_to_keep_count": len(messages_to_keep),
                     "reinjected_count": len(reinjected),
                 }
             )
             self.auto_compact_decider.record_success()
+            return compact_messages
         except Exception as exc:  # noqa: BLE001 - compact 失败不能中断主对话。
             self.auto_compact_decider.record_failure()
             await self.transcript_store.append_event(
@@ -200,6 +225,7 @@ class QueryEngine:
                     "error": str(exc),
                 }
             )
+            return []
 
     def _write_memories(self, tool_context: ToolUseContext, new_messages: list[Message]) -> None:
         summaries = self.memory_extractor.extract(new_messages)
