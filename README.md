@@ -46,3 +46,4 @@ uv run morty-code --enable-local-tools
 - compact 会写入 system boundary + user summary，query 前只取最后一个 compact boundary 之后的上下文
 - `/compact` 会触发本地 compact 状态迁移，不再把压缩请求转交给模型普通回答
 - compact 摘要会保留用户目标、助手动作、工具调用/结果和关键附件状态
+- prompt cache 计划与漂移检测：system boundary、message cache marker、tool schema marker、cache usage 记录

@@ -45,6 +45,16 @@ class ContentReplacementState:
 
 
 @dataclass
+class PromptCacheRuntimeState:
+    """记录 prompt cache 的请求稳定性和 provider usage。"""
+
+    previous_hashes: dict[str, str] = field(default_factory=dict)
+    call_count: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+
+
+@dataclass
 class ToolUseContext:
     """整个 query runtime 的可变状态总线。"""
 
@@ -54,6 +64,7 @@ class ToolUseContext:
     app_state: dict[str, Any]
     read_file_state: dict[str, FileViewState]
     content_replacement_state: ContentReplacementState
+    prompt_cache_state: PromptCacheRuntimeState = field(default_factory=PromptCacheRuntimeState)
     loaded_nested_memory_paths: set[str] = field(default_factory=set)
     discovered_skill_names: set[str] = field(default_factory=set)
     session_memory_path: str | None = None

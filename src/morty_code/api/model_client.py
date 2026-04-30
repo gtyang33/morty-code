@@ -72,6 +72,8 @@ class OpenAICompatibleModelClient:
         self.base_url = (base_url or os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self.timeout = timeout
+        # 普通 OpenAI Chat 网关可能拒绝 cache_control；默认只在 runtime 内部规划。
+        self.send_cache_control = os.environ.get("MORTY_SEND_CACHE_CONTROL") == "1"
 
     async def respond(
         self,
@@ -113,7 +115,10 @@ class OpenAICompatibleModelClient:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"model provider returned HTTP {exc.code}: {detail}") from exc
         choice = payload.get("choices", [{}])[0].get("message", {})
-        return self._message_from_choice(choice)
+        message = self._message_from_choice(choice)
+        if isinstance(payload.get("usage"), dict):
+            message.payload["usage"] = payload["usage"]
+        return message
 
     def _build_request_body(
         self,
@@ -127,7 +132,8 @@ class OpenAICompatibleModelClient:
         }
         tool_schemas_json = system_context.get("tool_schemas_json")
         if tool_schemas_json:
-            body["tools"] = json.loads(tool_schemas_json)
+            tools = json.loads(tool_schemas_json)
+            body["tools"] = tools if self.send_cache_control else self._strip_cache_fields(tools)
         return body
 
     def _message_from_choice(self, choice: dict[str, object]) -> Message:
@@ -254,11 +260,17 @@ class OpenAICompatibleModelClient:
             if block.get("type") == "text":
                 text = str(block.get("text", ""))
                 if text:
-                    parts.append({"type": "text", "text": text})
+                    text_part: dict[str, object] = {"type": "text", "text": text}
+                    if self.send_cache_control and isinstance(block.get("cache_control"), dict):
+                        text_part["cache_control"] = block["cache_control"]
+                    parts.append(text_part)
             elif block.get("type") == "image":
                 source = block.get("source")
                 if isinstance(source, str) and source:
-                    parts.append({"type": "image_url", "image_url": {"url": source}})
+                    image_part: dict[str, object] = {"type": "image_url", "image_url": {"url": source}}
+                    if self.send_cache_control and isinstance(block.get("cache_control"), dict):
+                        image_part["cache_control"] = block["cache_control"]
+                    parts.append(image_part)
         if not parts:
             return [{"type": "text", "text": ""}]
         return parts
@@ -276,8 +288,19 @@ class OpenAICompatibleModelClient:
             visible_system_context = {
                 key: value
                 for key, value in system_context.items()
-                if key != "tool_schemas_json"
+                if key not in {"tool_schemas_json", "prompt_cache_plan_json"}
             }
             if visible_system_context:
                 parts.append("System context:\n" + json.dumps(visible_system_context, ensure_ascii=False, indent=2))
         return "\n\n".join(part for part in parts if part.strip())
+
+    def _strip_cache_fields(self, value: object) -> object:
+        if isinstance(value, list):
+            return [self._strip_cache_fields(item) for item in value]
+        if isinstance(value, dict):
+            return {
+                key: self._strip_cache_fields(item)
+                for key, item in value.items()
+                if key not in {"cache_control", "cache_reference"}
+            }
+        return value

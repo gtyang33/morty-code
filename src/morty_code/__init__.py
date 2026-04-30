@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 from dataclasses import asdict
 from pathlib import Path
 
@@ -63,6 +64,9 @@ def main() -> None:
             "cwd": ".",
             "transcript_path": str(transcript_store.path),
             "tool_schemas": tool_registry.api_tool_schemas() if tool_registry is not None else [],
+            "enable_prompt_caching": os.environ.get("DISABLE_PROMPT_CACHING") != "1",
+            "send_cache_control": os.environ.get("MORTY_SEND_CACHE_CONTROL") == "1",
+            "prompt_cache_ttl": os.environ.get("MORTY_PROMPT_CACHE_TTL"),
         },
         read_file_state={},
         content_replacement_state=ContentReplacementState(),

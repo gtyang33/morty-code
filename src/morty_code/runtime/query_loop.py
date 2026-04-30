@@ -3,6 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from morty_code.attachments.attachment_manager import AttachmentManager
+from morty_code.cache.prompt_cache import (
+    PromptCacheBreakDetector,
+    PromptCachePlanner,
+    extract_cache_usage,
+)
 from morty_code.tools.tool_result_budget import apply_tool_result_budget
 from morty_code.transcript.message_normalizer import MessageNormalizer
 from morty_code.types.messages import Message
@@ -36,6 +41,7 @@ class QueryLoop:
         self.normalizer = MessageNormalizer()
         self.attachment_manager = attachment_manager or AttachmentManager()
         self.max_iterations = max_iterations
+        self.cache_detector = PromptCacheBreakDetector()
 
     async def run(
         self,
@@ -68,12 +74,53 @@ class QueryLoop:
                     }
                 )
             api_messages = self.normalizer.normalize_for_api(working_messages, tool_context.tools)
+            tool_schemas_json = cache_safe.system_context.get("tool_schemas_json")
+            tool_schemas = []
+            if tool_schemas_json:
+                import json
+
+                tool_schemas = json.loads(tool_schemas_json)
+            cache_plan = PromptCachePlanner(
+                enable_prompt_caching=bool(tool_context.app_state.get("enable_prompt_caching", True)),
+                use_global_scope=bool(tool_context.app_state.get("use_global_prompt_cache_scope", True)),
+                cache_ttl=str(tool_context.app_state.get("prompt_cache_ttl") or "") or None,
+            ).prepare(
+                messages=api_messages,
+                system_prompt=cache_safe.system_prompt,
+                tool_schemas=tool_schemas,
+                skip_cache_write=bool(tool_context.app_state.get("skip_cache_write", False)),
+            )
+            cache_event = self.cache_detector.record(
+                tool_context.prompt_cache_state,
+                system_blocks=cache_plan["system_blocks"],
+                tool_schemas=cache_plan["tool_schemas"],
+                model=tool_context.model,
+                messages=cache_plan["messages"],
+            )
+            if cache_event is not None:
+                metadata_events.append(cache_event)
+            cache_safe.system_context["prompt_cache_plan_json"] = self._json_dumps(cache_plan)
+            if tool_context.app_state.get("send_cache_control"):
+                api_messages = cache_plan["messages"]
+                cache_safe.system_context["tool_schemas_json"] = self._json_dumps(cache_plan["tool_schemas"])
             assistant_message = await self.model_client.respond(
                 messages=api_messages,
                 system_prompt=cache_safe.system_prompt,
                 user_context=cache_safe.user_context,
                 system_context=cache_safe.system_context,
             )
+            usage = extract_cache_usage(assistant_message.payload)
+            if usage["cache_read_input_tokens"] or usage["cache_creation_input_tokens"]:
+                tool_context.prompt_cache_state.cache_read_input_tokens += usage["cache_read_input_tokens"]
+                tool_context.prompt_cache_state.cache_creation_input_tokens += usage["cache_creation_input_tokens"]
+                metadata_events.append(
+                    {
+                        "type": "prompt-cache-usage",
+                        **usage,
+                        "total_cache_read_input_tokens": tool_context.prompt_cache_state.cache_read_input_tokens,
+                        "total_cache_creation_input_tokens": tool_context.prompt_cache_state.cache_creation_input_tokens,
+                    }
+                )
             new_messages.append(assistant_message)
             working_messages.append(assistant_message)
 
@@ -104,3 +151,8 @@ class QueryLoop:
             new_messages=[*new_messages, *attachment_messages],
             metadata_events=metadata_events,
         )
+
+    def _json_dumps(self, value: object) -> str:
+        import json
+
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
