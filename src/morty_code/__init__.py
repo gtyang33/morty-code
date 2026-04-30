@@ -117,7 +117,7 @@ def main() -> None:
     parser.add_argument("--provider", choices=["echo", "openai-compatible"], default="echo")
     parser.add_argument("--model", default="echo-model")
     parser.add_argument("--base-url", help="OpenAI-compatible base URL，默认读取 OPENAI_BASE_URL")
-    parser.add_argument("--enable-local-tools", action="store_true", help="启用 cwd 内只读本地工具")
+    parser.add_argument("--enable-local-tools", action="store_true", help="启用 cwd 内本地文件和命令工具")
     args = parser.parse_args()
 
     if args.session:
