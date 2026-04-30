@@ -7,7 +7,7 @@ from morty_code.attachments.attachment_manager import AttachmentManager
 from morty_code.input.commands import CommandRegistry, CommandSpec
 from morty_code.input.slash_commands import SlashCommandProcessor, parse_slash_command
 from morty_code.memory.durable_memory import DurableMemoryStore
-from morty_code.types.messages import Message
+from morty_code.types.messages import Attachment, Message
 from morty_code.types.runtime_state import ProcessedUserInput, QueuedCommand, ToolUseContext
 
 
@@ -42,16 +42,18 @@ class UserInputProcessor:
             )
             if processed.allowed_tools is not None:
                 processed.messages.append(
-                    Message(
-                        uuid=str(uuid4()),
+                    self.attachment_manager.to_message(
+                        Attachment(
+                            type="command_permissions",
+                            payload={
+                                "command": text.split(" ", 1)[0],
+                                "allowed_tools": processed.allowed_tools,
+                            },
+                            is_meta=True,
+                            phase="input",
+                            stable_key=f"input:command_permissions:{text.split(' ', 1)[0]}",
+                        ),
                         timestamp=datetime.utcnow().isoformat(),
-                        type="attachment",
-                        payload={
-                            "attachment_type": "command_permissions",
-                            "command": text.split(" ", 1)[0],
-                            "allowed_tools": processed.allowed_tools,
-                        },
-                        is_meta=True,
                     )
                 )
             return processed
@@ -77,12 +79,9 @@ class UserInputProcessor:
             origin=command.origin,
         )
         attachment_messages = [
-            Message(
-                uuid=str(uuid4()),
+            self.attachment_manager.to_message(
+                attachment,
                 timestamp=datetime.utcnow().isoformat(),
-                type="attachment",
-                payload={"attachment_type": attachment.type, **attachment.payload},
-                is_meta=attachment.is_meta,
                 origin=command.origin,
             )
             for attachment in attachments

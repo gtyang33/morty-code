@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 
 Role = Literal["user", "assistant", "system", "attachment", "progress"]
+AttachmentPhase = Literal["input", "delta", "reinjection"]
 
 
 @dataclass
@@ -33,3 +34,7 @@ class Attachment:
     payload: dict[str, Any]
     source_uuid: str | None = None
     is_meta: bool = False
+    # phase 用来区分用户输入直接触发、轮尾增量、compact 后重注入。
+    phase: AttachmentPhase = "input"
+    # stable_key 用于同阶段去重和 transcript 恢复后的重复抑制。
+    stable_key: str | None = None

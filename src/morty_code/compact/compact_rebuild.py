@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
-from uuid import uuid4
-
+from morty_code.attachments.attachment_manager import AttachmentManager
 from morty_code.types.messages import Message
 from morty_code.types.runtime_state import ToolUseContext
 
@@ -27,101 +25,8 @@ def build_reinjection_attachments(context: ToolUseContext) -> list[Message]:
     所以需要把当前模型已经见过的文件视图和 session memory 重新显式化。
     """
 
-    now = datetime.utcnow().isoformat()
-    attachments: list[Message] = []
-    for file_state in context.read_file_state.values():
-        attachments.append(
-            Message(
-                uuid=str(uuid4()),
-                timestamp=now,
-                type="attachment",
-                payload={
-                    "attachment_type": "at_mentioned_file",
-                    "path": file_state.path,
-                    "resolved_path": file_state.path,
-                    "kind": "file",
-                    "content": file_state.content,
-                    "truncated": file_state.is_partial_view,
-                    "source": "post_compact_reinject",
-                },
-                is_meta=True,
-            )
-        )
-    if context.session_memory_path:
-        from pathlib import Path
-
-        session_path = Path(context.session_memory_path)
-        if session_path.exists():
-            attachments.append(
-                Message(
-                    uuid=str(uuid4()),
-                    timestamp=now,
-                    type="attachment",
-                    payload={
-                        "attachment_type": "session_memory",
-                        "path": str(session_path),
-                        "content": session_path.read_text(encoding="utf-8", errors="replace")[:12000],
-                        "source": "post_compact_reinject",
-                    },
-                    is_meta=True,
-                )
-            )
-    if context.app_state.get("plan_mode"):
-        attachments.append(
-            Message(
-                uuid=str(uuid4()),
-                timestamp=now,
-                type="attachment",
-                payload={
-                    "attachment_type": "plan_mode",
-                    "content": "Plan mode is active after compaction. Do not modify files until the plan is approved.",
-                    "source": "post_compact_reinject",
-                },
-                is_meta=True,
-            )
-        )
-    if context.discovered_skill_names:
-        attachments.append(
-            Message(
-                uuid=str(uuid4()),
-                timestamp=now,
-                type="attachment",
-                payload={
-                    "attachment_type": "skill_discovery",
-                    "skills": sorted(context.discovered_skill_names),
-                    "source": "post_compact_reinject",
-                },
-                is_meta=True,
-            )
-        )
-    tool_schemas = context.app_state.get("tool_schemas")
-    if tool_schemas:
-        attachments.append(
-            Message(
-                uuid=str(uuid4()),
-                timestamp=now,
-                type="attachment",
-                payload={
-                    "attachment_type": "command_permissions",
-                    "allowed_tools": context.tools,
-                    "tool_schema_count": len(tool_schemas) if isinstance(tool_schemas, list) else 0,
-                    "source": "post_compact_reinject",
-                },
-                is_meta=True,
-            )
-        )
-    if context.content_replacement_state.replacements:
-        attachments.append(
-            Message(
-                uuid=str(uuid4()),
-                timestamp=now,
-                type="attachment",
-                payload={
-                    "attachment_type": "content_replacement_state",
-                    "replacement_ids": sorted(context.content_replacement_state.replacements),
-                    "source": "post_compact_reinject",
-                },
-                is_meta=True,
-            )
-        )
-    return attachments
+    manager = AttachmentManager.from_context(context)
+    return [
+        manager.to_message(attachment)
+        for attachment in manager.collect_reinjection(context, messages=[])
+    ]

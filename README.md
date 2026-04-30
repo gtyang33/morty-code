@@ -48,3 +48,4 @@ uv run morty-code --enable-local-tools
 - compact 摘要会保留用户目标、助手动作、工具调用/结果和关键附件状态
 - prompt cache 计划与漂移检测：system boundary、message cache marker、tool schema marker、cache usage 记录
 - provider/API 失败会记录 retry、cache 降级和 query_failed metadata，并返回可落盘的 assistant error message
+- attachment 分为 input/delta/reinjection 阶段，并带 stable_key、统一预算与去重

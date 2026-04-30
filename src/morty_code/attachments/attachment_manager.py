@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from morty_code.memory.relevant_memory import RelevantMemoryFinder
-from morty_code.types.messages import Attachment, Message
+from morty_code.types.messages import Attachment, AttachmentPhase, Message
 from morty_code.types.runtime_state import FileViewState, QueuedCommand, ToolUseContext
 
 
 AT_MENTION_RE = re.compile(r"@([A-Za-z0-9_./-]+)")
 TURNS_BETWEEN_MODE_ATTACHMENTS = 3
+DEFAULT_MAX_ATTACHMENTS_PER_TURN = 20
+DEFAULT_MAX_ATTACHMENT_CHARS = 20000
 
 
 class AttachmentManager:
@@ -36,8 +39,14 @@ class AttachmentManager:
         for match in AT_MENTION_RE.finditer(input_text):
             attachments.append(self._build_at_mentioned_attachment(match.group(1), context))
         if self.relevant_memory_finder is not None:
-            attachments.extend(self.relevant_memory_finder.find(input_text))
-        return attachments
+            attachments.extend(self._tag_relevant_memories(self.relevant_memory_finder.find(input_text)))
+        return self._finalize_attachments(
+            attachments,
+            context=context,
+            messages=messages,
+            phase="input",
+            allow_seen_stable_keys=True,
+        )
 
     async def collect_post_iteration(
         self,
@@ -62,9 +71,144 @@ class AttachmentManager:
                     },
                     source_uuid=command.uuid,
                     is_meta=command.is_meta,
+                    phase="delta",
+                    stable_key=f"delta:queued_command:{command.uuid or command.value}",
                 )
             )
-        return attachments
+        return self._finalize_attachments(
+            attachments,
+            context=context,
+            messages=messages,
+            phase="delta",
+            allow_seen_stable_keys=False,
+        )
+
+    def collect_reinjection(
+        self,
+        context: ToolUseContext,
+        messages: list[Message],
+    ) -> list[Attachment]:
+        """compact 后重新注入弱持久化状态。
+
+        这一层和 input/delta 共享预算、去重、稳定 key，避免 compact 模块
+        自己拼 attachment payload，最后变成第二套动态上下文协议。
+        """
+
+        attachments: list[Attachment] = []
+        for file_state in context.read_file_state.values():
+            attachments.append(
+                Attachment(
+                    type="at_mentioned_file",
+                    payload={
+                        "path": file_state.path,
+                        "resolved_path": file_state.path,
+                        "kind": "file",
+                        "content": file_state.content,
+                        "truncated": file_state.is_partial_view,
+                        "source": "post_compact_reinject",
+                    },
+                    is_meta=True,
+                    phase="reinjection",
+                    stable_key=f"reinjection:file:{file_state.path}",
+                )
+            )
+        if context.session_memory_path:
+            session_path = Path(context.session_memory_path)
+            if session_path.exists():
+                attachments.append(
+                    Attachment(
+                        type="session_memory",
+                        payload={
+                            "path": str(session_path),
+                            "content": session_path.read_text(encoding="utf-8", errors="replace"),
+                            "source": "post_compact_reinject",
+                        },
+                        is_meta=True,
+                        phase="reinjection",
+                        stable_key=f"reinjection:session_memory:{session_path}",
+                    )
+                )
+        if context.app_state.get("plan_mode"):
+            attachments.append(
+                Attachment(
+                    type="plan_mode",
+                    payload={
+                        "content": "Plan mode is active after compaction. Do not modify files until the plan is approved.",
+                        "source": "post_compact_reinject",
+                    },
+                    is_meta=True,
+                    phase="reinjection",
+                    stable_key="reinjection:plan_mode",
+                )
+            )
+        if context.discovered_skill_names:
+            attachments.append(
+                Attachment(
+                    type="skill_discovery",
+                    payload={
+                        "skills": sorted(context.discovered_skill_names),
+                        "source": "post_compact_reinject",
+                    },
+                    is_meta=True,
+                    phase="reinjection",
+                    stable_key="reinjection:skill_discovery",
+                )
+            )
+        tool_schemas = context.app_state.get("tool_schemas")
+        if tool_schemas:
+            attachments.append(
+                Attachment(
+                    type="command_permissions",
+                    payload={
+                        "allowed_tools": context.tools,
+                        "tool_schema_count": len(tool_schemas) if isinstance(tool_schemas, list) else 0,
+                        "source": "post_compact_reinject",
+                    },
+                    is_meta=True,
+                    phase="reinjection",
+                    stable_key="reinjection:tool_schema_summary",
+                )
+            )
+        if context.content_replacement_state.replacements:
+            attachments.append(
+                Attachment(
+                    type="content_replacement_state",
+                    payload={
+                        "replacement_ids": sorted(context.content_replacement_state.replacements),
+                        "source": "post_compact_reinject",
+                    },
+                    is_meta=True,
+                    phase="reinjection",
+                    stable_key="reinjection:content_replacement_state",
+                )
+            )
+        return self._finalize_attachments(
+            attachments,
+            context=context,
+            messages=messages,
+            phase="reinjection",
+            allow_seen_stable_keys=True,
+        )
+
+    def to_message(
+        self,
+        attachment: Attachment,
+        timestamp: str | None = None,
+        origin: dict[str, object] | None = None,
+    ) -> Message:
+        return Message(
+            uuid=str(uuid4()),
+            timestamp=timestamp or datetime.utcnow().isoformat(),
+            type="attachment",
+            payload={
+                "attachment_type": attachment.type,
+                "attachment_phase": attachment.phase,
+                "stable_key": attachment.stable_key,
+                **attachment.payload,
+            },
+            is_meta=attachment.is_meta,
+            origin=origin,
+        )
 
     def bind_context(self, context: ToolUseContext) -> None:
         """根据 runtime context 延迟绑定 memory finder。
@@ -134,6 +278,8 @@ class AttachmentManager:
                 type="date_change",
                 payload={"previous_date": previous_date, "current_date": current_date},
                 is_meta=True,
+                phase="delta",
+                stable_key=f"delta:date_change:{current_date}",
             )
         ]
 
@@ -148,6 +294,8 @@ class AttachmentManager:
                         type="plan_mode_exit",
                         payload={"content": "Plan mode has been exited. Implementation is allowed."},
                         is_meta=True,
+                        phase="delta",
+                        stable_key=f"delta:plan_mode_exit:{turn_index}",
                     )
                 ]
             return []
@@ -163,6 +311,8 @@ class AttachmentManager:
                     "turn_index": turn_index,
                 },
                 is_meta=True,
+                phase="delta",
+                stable_key="delta:plan_mode",
             )
         ]
 
@@ -176,6 +326,74 @@ class AttachmentManager:
                 type="hook_additional_context",
                 payload={"content": str(item)},
                 is_meta=True,
+                phase="delta",
+                stable_key=f"delta:hook_additional_context:{index}:{str(item)[:80]}",
             )
-            for item in queue
+            for index, item in enumerate(queue)
         ]
+
+    def _tag_relevant_memories(self, attachments: list[Attachment]) -> list[Attachment]:
+        tagged: list[Attachment] = []
+        for attachment in attachments:
+            attachment.phase = "input"
+            attachment.stable_key = f"input:relevant_memory:{attachment.payload.get('path', '')}"
+            tagged.append(attachment)
+        return tagged
+
+    def _finalize_attachments(
+        self,
+        attachments: list[Attachment],
+        context: ToolUseContext,
+        messages: list[Message],
+        phase: AttachmentPhase,
+        allow_seen_stable_keys: bool,
+    ) -> list[Attachment]:
+        max_count = int(context.app_state.get("max_attachments_per_turn", DEFAULT_MAX_ATTACHMENTS_PER_TURN))
+        max_chars = int(context.app_state.get("max_attachment_chars", DEFAULT_MAX_ATTACHMENT_CHARS))
+        seen = set() if allow_seen_stable_keys else self._seen_stable_keys(messages)
+        result: list[Attachment] = []
+        dropped = 0
+        for attachment in attachments:
+            attachment.phase = attachment.phase or phase
+            attachment.stable_key = attachment.stable_key or self._stable_key_for(attachment)
+            if attachment.stable_key in seen:
+                dropped += 1
+                continue
+            seen.add(attachment.stable_key)
+            result.append(self._apply_budget(attachment, max_chars))
+            if len(result) >= max_count:
+                dropped += max(0, len(attachments) - len(result))
+                break
+        if dropped:
+            context.app_state["last_attachment_finalize_dropped"] = dropped
+        return result
+
+    def _apply_budget(self, attachment: Attachment, max_chars: int) -> Attachment:
+        content = attachment.payload.get("content")
+        if not isinstance(content, str) or len(content) <= max_chars:
+            return attachment
+        updated_payload = dict(attachment.payload)
+        updated_payload["content"] = content[:max_chars]
+        updated_payload["truncated_by_budget"] = True
+        updated_payload["original_chars"] = len(content)
+        return Attachment(
+            type=attachment.type,
+            payload=updated_payload,
+            source_uuid=attachment.source_uuid,
+            is_meta=attachment.is_meta,
+            phase=attachment.phase,
+            stable_key=attachment.stable_key,
+        )
+
+    def _seen_stable_keys(self, messages: list[Message]) -> set[str]:
+        return {
+            str(message.payload.get("stable_key"))
+            for message in messages
+            if message.type == "attachment" and message.payload.get("stable_key")
+        }
+
+    def _stable_key_for(self, attachment: Attachment) -> str:
+        path = attachment.payload.get("resolved_path") or attachment.payload.get("path")
+        if path:
+            return f"{attachment.phase}:{attachment.type}:{path}"
+        return f"{attachment.phase}:{attachment.type}:{attachment.source_uuid or str(attachment.payload)[:120]}"

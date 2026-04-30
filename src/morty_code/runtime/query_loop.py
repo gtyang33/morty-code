@@ -150,14 +150,11 @@ class QueryLoop:
             queued_commands=[],
         )
         attachment_messages = [
-            Message(
-                uuid=f"attachment-{index}",
+            self.attachment_manager.to_message(
+                attachment,
                 timestamp=assistant_message.timestamp,
-                type="attachment",
-                payload={"attachment_type": attachment.type, **attachment.payload},
-                is_meta=attachment.is_meta,
             )
-            for index, attachment in enumerate(post_attachments)
+            for attachment in post_attachments
         ]
         return QueryLoopResult(
             new_messages=[*new_messages, *attachment_messages],
