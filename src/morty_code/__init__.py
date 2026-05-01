@@ -28,6 +28,7 @@ from morty_code.prompt.prompt_builder import PromptBuilder
 from morty_code.prompt.prompt_sections import PromptSectionRegistry
 from morty_code.runtime.query_engine import QueryEngine
 from morty_code.runtime.query_loop import QueryLoop
+from morty_code.security import load_permission_settings
 from morty_code.tools import NullToolRunner, ToolRunner, create_local_tool_registry
 from morty_code.transcript.transcript_store import TranscriptStore
 from morty_code.types.messages import Message
@@ -123,6 +124,11 @@ def main() -> None:
     parser.add_argument("--model", default="echo-model")
     parser.add_argument("--base-url", help="OpenAI-compatible base URL，默认读取 OPENAI_BASE_URL")
     parser.add_argument("--enable-local-tools", action="store_true", help="启用 cwd 内本地文件和命令工具")
+    parser.add_argument(
+        "--permission-mode",
+        choices=["acceptEdits", "bypassPermissions", "default", "dontAsk", "plan"],
+        help="覆盖项目权限配置里的默认 permission mode",
+    )
     args = parser.parse_args()
 
     if args.session:
@@ -136,6 +142,14 @@ def main() -> None:
         else EchoModelClient()
     )
     tool_registry = create_local_tool_registry(".") if args.enable_local_tools else None
+    permission_settings = load_permission_settings(
+        ".",
+        env_allow=_env_list("MORTY_ALLOW_TOOLS"),
+        env_deny=_env_list("MORTY_DENY_TOOLS"),
+        env_ask=_env_list("MORTY_ASK_TOOLS"),
+        env_default_mode=args.permission_mode or os.environ.get("MORTY_PERMISSION_MODE"),
+    )
+    permission_mode = permission_settings.default_mode or "default"
     tool_runner = ToolRunner(tool_registry) if tool_registry is not None else NullToolRunner()
     engine = QueryEngine(
         prompt_builder=PromptBuilder(PromptSectionRegistry()),
@@ -150,17 +164,20 @@ def main() -> None:
     tool_context = ToolUseContext(
         tools=tool_registry.list_names() if tool_registry is not None else [],
         model=args.model,
-        permission_mode="default",
+        permission_mode=permission_mode,
         app_state={
             "cwd": ".",
+            "permission_mode": permission_mode,
             "session_id": transcript_store.session_id,
             "transcript_path": str(transcript_store.path),
             "plans_dir": ".morty/plans",
             "subagent_transcripts_dir": ".morty/subagents",
             "subagent_tasks_dir": ".morty/tasks",
             "allow_dangerous_bash": os.environ.get("MORTY_ALLOW_DANGEROUS_BASH") == "1",
-            "always_allowed_tools": _env_list("MORTY_ALLOW_TOOLS"),
-            "denied_tools": _env_list("MORTY_DENY_TOOLS"),
+            "always_allowed_tools": permission_settings.allow,
+            "denied_tools": permission_settings.deny,
+            "always_ask_tools": permission_settings.ask,
+            "permission_settings_sources": permission_settings.sources,
             "tool_schemas": tool_registry.api_tool_schemas() if tool_registry is not None else [],
             "enable_prompt_caching": os.environ.get("DISABLE_PROMPT_CACHING") != "1",
             "send_cache_control": os.environ.get("MORTY_SEND_CACHE_CONTROL") == "1",
@@ -185,18 +202,37 @@ def main() -> None:
                 {
                     "cwd": ".",
                     "model": args.model,
+                    "permission_mode": permission_mode,
                     "session_id": transcript_store.session_id,
                     "transcript_path": str(transcript_store.path),
                     "plans_dir": ".morty/plans",
                     "subagent_transcripts_dir": ".morty/subagents",
                     "subagent_tasks_dir": ".morty/tasks",
                     "allow_dangerous_bash": os.environ.get("MORTY_ALLOW_DANGEROUS_BASH") == "1",
-                    "always_allowed_tools": _env_list("MORTY_ALLOW_TOOLS"),
-                    "denied_tools": _env_list("MORTY_DENY_TOOLS"),
+                    "always_allowed_tools": permission_settings.allow,
+                    "denied_tools": permission_settings.deny,
+                    "always_ask_tools": permission_settings.ask,
+                    "permission_settings_sources": permission_settings.sources,
                 }
             )
         )
         tool_context = restored["tool_context"]
+        tool_context.tools = tool_registry.list_names() if tool_registry is not None else []
+        tool_context.model = args.model
+        tool_context.permission_mode = permission_mode
+        tool_context.app_state.update(
+            {
+                "permission_mode": permission_mode,
+                "subagent_transcripts_dir": ".morty/subagents",
+                "subagent_tasks_dir": ".morty/tasks",
+                "allow_dangerous_bash": os.environ.get("MORTY_ALLOW_DANGEROUS_BASH") == "1",
+                "always_allowed_tools": permission_settings.allow,
+                "denied_tools": permission_settings.deny,
+                "always_ask_tools": permission_settings.ask,
+                "permission_settings_sources": permission_settings.sources,
+                "tool_schemas": tool_registry.api_tool_schemas() if tool_registry is not None else [],
+            }
+        )
         print(f"restored {len(restored['messages'])} messages from {args.session}")
 
     if args.once is not None:

@@ -50,6 +50,7 @@ def evaluate_tool_permission(
     del tool_input  # 预留给后续 Bash prefix / path scoped rule。
     denied = _as_string_set(context.app_state.get("denied_tools"))
     allowed = _as_string_set(context.app_state.get("always_allowed_tools"))
+    ask = _as_string_set(context.app_state.get("always_ask_tools"))
     mode = str(context.permission_mode or context.app_state.get("permission_mode") or "default")
 
     if tool_name in denied or "*" in denied:
@@ -62,6 +63,12 @@ def evaluate_tool_permission(
         return PermissionDecision("allow", "mode", "bypassPermissions allows tool execution.")
     if tool_name in allowed or "*" in allowed:
         return PermissionDecision("allow", "rule", f"Tool '{tool_name}' explicitly allowed.")
+    if tool_name in ask or "*" in ask:
+        return PermissionDecision(
+            behavior="ask",
+            reason="rule",
+            message=f"Tool '{tool_name}' requires approval by configured permission rule.",
+        )
 
     if mode == "plan" or bool(context.app_state.get("plan_mode", False)):
         if tool_name in _MUTATING_TOOLS:
