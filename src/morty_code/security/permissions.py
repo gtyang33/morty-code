@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from morty_code.security.shell_rules import rule_matches_bash_command, rule_matches_tool
 from morty_code.types.runtime_state import ToolUseContext
 
 
@@ -47,28 +48,37 @@ def evaluate_tool_permission(
     5. 默认放行。
     """
 
-    del tool_input  # 预留给后续 Bash prefix / path scoped rule。
     denied = _as_string_set(context.app_state.get("denied_tools"))
     allowed = _as_string_set(context.app_state.get("always_allowed_tools"))
     ask = _as_string_set(context.app_state.get("always_ask_tools"))
     mode = str(context.permission_mode or context.app_state.get("permission_mode") or "default")
 
-    if tool_name in denied or "*" in denied:
+    command = str(tool_input.get("command", "")).strip() if tool_name == "bash" else ""
+    content_deny = _matches_content_rule(denied, tool_name, command)
+    if content_deny or _matches_tool_rule(denied, tool_name):
         return PermissionDecision(
             behavior="deny",
             reason="rule",
-            message=f"Tool '{tool_name}' denied by configured permission rule.",
+            message=f"Tool '{tool_name}' denied by configured permission rule{_rule_suffix(content_deny)}.",
         )
-    if mode == "bypassPermissions":
-        return PermissionDecision("allow", "mode", "bypassPermissions allows tool execution.")
-    if tool_name in allowed or "*" in allowed:
-        return PermissionDecision("allow", "rule", f"Tool '{tool_name}' explicitly allowed.")
-    if tool_name in ask or "*" in ask:
+    content_ask = _matches_content_rule(ask, tool_name, command)
+    if content_ask:
+        return PermissionDecision(
+            behavior="ask",
+            reason="rule",
+            message=f"Tool '{tool_name}' requires approval by configured permission rule ({content_ask}).",
+        )
+    if _matches_tool_rule(ask, tool_name):
         return PermissionDecision(
             behavior="ask",
             reason="rule",
             message=f"Tool '{tool_name}' requires approval by configured permission rule.",
         )
+    if mode == "bypassPermissions":
+        return PermissionDecision("allow", "mode", "bypassPermissions allows tool execution.")
+    content_allow = _matches_content_rule(allowed, tool_name, command)
+    if content_allow or _matches_tool_rule(allowed, tool_name):
+        return PermissionDecision("allow", "rule", f"Tool '{tool_name}' explicitly allowed{_rule_suffix(content_allow)}.")
 
     if mode == "plan" or bool(context.app_state.get("plan_mode", False)):
         if tool_name in _MUTATING_TOOLS:
@@ -101,3 +111,20 @@ def _as_string_set(value: object) -> set[str]:
     if isinstance(value, list | tuple | set):
         return {str(item).strip() for item in value if str(item).strip()}
     return set()
+
+
+def _matches_tool_rule(rules: set[str], tool_name: str) -> bool:
+    return "*" in rules or tool_name in rules or any(rule_matches_tool(rule, tool_name) for rule in rules)
+
+
+def _matches_content_rule(rules: set[str], tool_name: str, command: str) -> str | None:
+    if tool_name != "bash" or not command:
+        return None
+    for rule in sorted(rules):
+        if rule_matches_bash_command(rule, command):
+            return rule
+    return None
+
+
+def _rule_suffix(rule: str | None) -> str:
+    return f" ({rule})" if rule else ""
