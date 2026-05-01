@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import uuid4
 
+from morty_code.security import evaluate_tool_permission
 from morty_code.tools.tool_registry import ToolRegistry
 from morty_code.types.messages import Message
 from morty_code.types.runtime_state import CacheSafeParams, ToolUseContext
@@ -50,13 +51,27 @@ class ToolRunner:
                     )
                 )
                 continue
+            tool_input = dict(tool_use.get("input") or {})
+            decision = evaluate_tool_permission(name, tool_input, context)
+            if decision.behavior != "allow":
+                results.append(
+                    self._tool_result(
+                        tool_use,
+                        content=(
+                            f"Tool '{name}' blocked by permission policy: "
+                            f"{decision.message}"
+                        ),
+                        is_error=True,
+                    )
+                )
+                continue
             try:
                 if tool.needs_context:
                     if cache_safe is None:
                         raise RuntimeError("cache_safe context is required for this tool")
-                    payload = await tool.handler(dict(tool_use.get("input") or {}), context, cache_safe)
+                    payload = await tool.handler(tool_input, context, cache_safe)
                 else:
-                    payload = await tool.handler(dict(tool_use.get("input") or {}))
+                    payload = await tool.handler(tool_input)
                 content = self._maybe_replace_large_result(tool_use, payload, context)
                 results.append(self._tool_result(tool_use, content=content, is_error=False))
             except Exception as exc:  # noqa: BLE001 - 工具异常必须进入 transcript，不能丢失。

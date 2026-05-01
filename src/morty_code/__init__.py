@@ -49,6 +49,11 @@ _MORTY_STYLE = Style.from_dict(
 _SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 
+def _env_list(name: str) -> list[str]:
+    raw = os.environ.get(name, "")
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 class _ReplLexer(Lexer):
     """简单 lexer：/command 高亮，其余为普通文本。"""
 
@@ -154,6 +159,8 @@ def main() -> None:
             "subagent_transcripts_dir": ".morty/subagents",
             "subagent_tasks_dir": ".morty/tasks",
             "allow_dangerous_bash": os.environ.get("MORTY_ALLOW_DANGEROUS_BASH") == "1",
+            "always_allowed_tools": _env_list("MORTY_ALLOW_TOOLS"),
+            "denied_tools": _env_list("MORTY_DENY_TOOLS"),
             "tool_schemas": tool_registry.api_tool_schemas() if tool_registry is not None else [],
             "enable_prompt_caching": os.environ.get("DISABLE_PROMPT_CACHING") != "1",
             "send_cache_control": os.environ.get("MORTY_SEND_CACHE_CONTROL") == "1",
@@ -184,6 +191,8 @@ def main() -> None:
                     "subagent_transcripts_dir": ".morty/subagents",
                     "subagent_tasks_dir": ".morty/tasks",
                     "allow_dangerous_bash": os.environ.get("MORTY_ALLOW_DANGEROUS_BASH") == "1",
+                    "always_allowed_tools": _env_list("MORTY_ALLOW_TOOLS"),
+                    "denied_tools": _env_list("MORTY_DENY_TOOLS"),
                 }
             )
         )

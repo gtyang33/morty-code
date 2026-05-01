@@ -262,6 +262,8 @@ class UserInputProcessor:
                     f"messages: {len(messages)}",
                     f"approximate_prompt_chars: {approximate_tokens}",
                     f"tools: {', '.join(tool_context.tools) if tool_context.tools else 'none'}",
+                    f"always_allowed_tools: {', '.join(tool_context.app_state.get('always_allowed_tools', [])) or 'none'}",
+                    f"denied_tools: {', '.join(tool_context.app_state.get('denied_tools', [])) or 'none'}",
                     f"read_file_state: {len(tool_context.read_file_state)}",
                     f"prompt_cache_calls: {tool_context.prompt_cache_state.call_count}",
                     f"prompt_cache_read_tokens: {tool_context.prompt_cache_state.cache_read_input_tokens}",
