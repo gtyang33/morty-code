@@ -153,6 +153,7 @@ def main() -> None:
             "plans_dir": ".morty/plans",
             "subagent_transcripts_dir": ".morty/subagents",
             "subagent_tasks_dir": ".morty/tasks",
+            "allow_dangerous_bash": os.environ.get("MORTY_ALLOW_DANGEROUS_BASH") == "1",
             "tool_schemas": tool_registry.api_tool_schemas() if tool_registry is not None else [],
             "enable_prompt_caching": os.environ.get("DISABLE_PROMPT_CACHING") != "1",
             "send_cache_control": os.environ.get("MORTY_SEND_CACHE_CONTROL") == "1",
@@ -182,6 +183,7 @@ def main() -> None:
                     "plans_dir": ".morty/plans",
                     "subagent_transcripts_dir": ".morty/subagents",
                     "subagent_tasks_dir": ".morty/tasks",
+                    "allow_dangerous_bash": os.environ.get("MORTY_ALLOW_DANGEROUS_BASH") == "1",
                 }
             )
         )

@@ -7,6 +7,11 @@ import re
 import time
 from pathlib import Path
 
+from morty_code.security import (
+    assert_safe_bash_command,
+    assert_safe_read_path,
+    assert_safe_write_path,
+)
 from morty_code.tools.tool_registry import ToolRegistry, ToolSpec
 from morty_code.types.runtime_state import CacheSafeParams, FileViewState, ToolUseContext
 
@@ -39,6 +44,7 @@ def create_local_tool_registry(
         _cache_safe: CacheSafeParams,
     ) -> dict[str, object]:
         path = _resolve_under_root(root, str(args.get("path", "")))
+        assert_safe_read_path(root, path)
         if path.is_dir():
             raise IsADirectoryError(str(path))
         content = path.read_text(encoding="utf-8", errors="replace")
@@ -163,6 +169,7 @@ def create_local_tool_registry(
         _cache_safe: CacheSafeParams,
     ) -> dict[str, object]:
         path = _resolve_for_write(root, str(args.get("path", "")))
+        assert_safe_write_path(root, path)
         content = str(args.get("content", ""))
         existed = path.exists()
         original = path.read_text(encoding="utf-8", errors="replace") if existed else None
@@ -189,6 +196,7 @@ def create_local_tool_registry(
         _cache_safe: CacheSafeParams,
     ) -> dict[str, object]:
         path = _resolve_under_root(root, str(args.get("path", "")))
+        assert_safe_write_path(root, path)
         old = str(args.get("old_string", ""))
         new = str(args.get("new_string", ""))
         replace_all = bool(args.get("replace_all") is True)
@@ -217,10 +225,19 @@ def create_local_tool_registry(
             "diff": _simple_diff(original, updated),
         }
 
-    async def bash(args: dict[str, object]) -> dict[str, object]:
+    async def bash(
+        args: dict[str, object],
+        context: ToolUseContext,
+        _cache_safe: CacheSafeParams,
+    ) -> dict[str, object]:
         command = str(args.get("command") or "").strip()
         if not command:
             raise ValueError("command is required")
+        assert_safe_bash_command(
+            command,
+            root=root,
+            allow_dangerous=bool(context.app_state.get("allow_dangerous_bash", False)),
+        )
         timeout_ms = _optional_int(args.get("timeout_ms"), default=120000, minimum=1000, maximum=600000)
         proc = await asyncio.create_subprocess_shell(
             command,
@@ -375,6 +392,7 @@ def create_local_tool_registry(
                 name="bash",
                 description="Run a shell command in the workspace root and return stdout/stderr.",
                 handler=bash,
+                needs_context=True,
                 input_schema={
                     "type": "object",
                     "properties": {
