@@ -22,6 +22,7 @@ from morty_code.compact.auto_compact import AutoCompactDecider
 from morty_code.compact.compact_agent import CompactAgent
 from morty_code.input.handle_input import InputDispatcher
 from morty_code.input.process_user_input import UserInputProcessor
+from morty_code.harness import run_stream_json_harness
 from morty_code.memory.memory_extractor import MemoryExtractor
 from morty_code.agents.task_registry import get_subagent_task_registry
 from morty_code.prompt.prompt_builder import PromptBuilder
@@ -120,6 +121,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="morty-code")
     parser.add_argument("--session", help="恢复指定 JSONL transcript 文件")
     parser.add_argument("--once", help="只提交一条输入后退出")
+    parser.add_argument("--input-format", choices=["text", "stream-json"], default="text")
     parser.add_argument("--provider", choices=["echo", "openai-compatible"], default="echo")
     parser.add_argument("--model", default="echo-model")
     parser.add_argument("--base-url", help="OpenAI-compatible base URL，默认读取 OPENAI_BASE_URL")
@@ -238,6 +240,10 @@ def main() -> None:
     if args.once is not None:
         for message in engine.submit_message_sync(args.once, tool_context):
             _print_cli_message(message)
+        return
+
+    if args.input_format == "stream-json":
+        run_stream_json_harness(engine, tool_context)
         return
 
     history_file = Path(".morty/repl_history")
