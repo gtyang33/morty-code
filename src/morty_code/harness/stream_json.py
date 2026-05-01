@@ -31,6 +31,9 @@ def run_stream_json_harness(
 
     input_stream = stdin or sys.stdin
     output_stream = stdout or sys.stdout
+    tool_context.app_state["permission_request_handler"] = (
+        lambda request: _request_tool_permission(request, tool_context, input_stream, output_stream)
+    )
     _write_event(output_stream, _initialized_event(tool_context))
     for raw_line in input_stream:
         line = raw_line.strip()
@@ -122,6 +125,71 @@ def _handle_control_request(
         )
         return
     _write_control_error(stdout, request_id, f"unsupported control_request subtype: {subtype}")
+
+
+def _request_tool_permission(
+    request: dict[str, object],
+    tool_context: ToolUseContext,
+    stdin: TextIO,
+    stdout: TextIO,
+) -> dict[str, object]:
+    request_id = str(uuid4())
+    _write_event(
+        stdout,
+        {
+            "type": "control_request",
+            "request_id": request_id,
+            "request": {
+                "subtype": "can_use_tool",
+                "tool_name": request.get("tool_name"),
+                "input": request.get("input") if isinstance(request.get("input"), dict) else {},
+                "tool_use_id": request.get("tool_use_id") or "",
+                "decision_reason": request.get("decision_reason") or "",
+                "description": request.get("message") or "",
+                "permission_suggestions": [],
+                "agent_id": _session_id(tool_context),
+            },
+        },
+    )
+    for raw_line in stdin:
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "control_response":
+            _write_event(
+                stdout,
+                result_event(
+                    session_id=_session_id(tool_context),
+                    success=False,
+                    error="only control_response is accepted while waiting for tool permission",
+                ),
+            )
+            continue
+        response = event.get("response")
+        if not isinstance(response, dict):
+            continue
+        if str(response.get("request_id") or "") != request_id:
+            continue
+        if response.get("subtype") == "error":
+            return {"behavior": "deny", "message": response.get("error") or "permission response error"}
+        payload = response.get("response")
+        if not isinstance(payload, dict):
+            return {"behavior": "deny", "message": "permission response missing decision payload"}
+        behavior = str(payload.get("behavior") or "deny")
+        if behavior == "allow":
+            result = {"behavior": "allow"}
+            if isinstance(payload.get("updatedInput"), dict):
+                result["updatedInput"] = payload["updatedInput"]
+            return result
+        return {
+            "behavior": "deny",
+            "message": str(payload.get("message") or "permission denied by harness"),
+        }
+    return {"behavior": "deny", "message": "permission response stream closed"}
 
 
 def _extract_user_text(event: dict[str, object]) -> str:

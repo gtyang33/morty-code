@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+from inspect import isawaitable
 from uuid import uuid4
 
-from morty_code.security import evaluate_tool_permission
+from morty_code.security import PermissionDecision, evaluate_tool_permission
 from morty_code.tools.tool_registry import ToolRegistry
 from morty_code.types.messages import Message
 from morty_code.types.runtime_state import CacheSafeParams, ToolUseContext
@@ -53,6 +54,16 @@ class ToolRunner:
                 continue
             tool_input = dict(tool_use.get("input") or {})
             decision = evaluate_tool_permission(name, tool_input, context)
+            if decision.behavior == "ask":
+                decision = await self._request_external_permission(
+                    tool_name=name,
+                    tool_input=tool_input,
+                    tool_use=tool_use,
+                    decision=decision,
+                    context=context,
+                )
+                if decision.updated_input is not None:
+                    tool_input = dict(decision.updated_input)
             if decision.behavior != "allow":
                 results.append(
                     self._tool_result(
@@ -93,6 +104,46 @@ class ToolRunner:
                 is_meta=True,
             )
         ]
+
+    async def _request_external_permission(
+        self,
+        *,
+        tool_name: str,
+        tool_input: dict[str, object],
+        tool_use: dict[str, object],
+        decision: PermissionDecision,
+        context: ToolUseContext,
+    ) -> PermissionDecision:
+        handler = context.app_state.get("permission_request_handler")
+        if not callable(handler):
+            return decision
+        response = handler(
+            {
+                "tool_name": tool_name,
+                "input": tool_input,
+                "tool_use_id": str(tool_use.get("id") or ""),
+                "decision_reason": decision.reason,
+                "message": decision.message,
+            }
+        )
+        if isawaitable(response):
+            response = await response
+        if not isinstance(response, dict):
+            return decision
+        behavior = str(response.get("behavior") or "deny")
+        if behavior == "allow":
+            updated = response.get("updatedInput") or response.get("updated_input")
+            return PermissionDecision(
+                behavior="allow",
+                reason="external",
+                message="Tool use approved by harness.",
+                updated_input=updated if isinstance(updated, dict) else None,
+            )
+        return PermissionDecision(
+            behavior="deny",
+            reason="external",
+            message=str(response.get("message") or "Tool use denied by harness."),
+        )
 
     def _extract_tool_uses(self, assistant_message: Message) -> list[dict[str, object]]:
         content = assistant_message.payload.get("content", [])

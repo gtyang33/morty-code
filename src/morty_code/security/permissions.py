@@ -18,6 +18,7 @@ class PermissionDecision:
     behavior: str
     reason: str
     message: str
+    updated_input: dict[str, Any] | None = None
 
 
 _MUTATING_TOOLS = {

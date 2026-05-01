@@ -36,13 +36,30 @@ Claude Code 里 harness 不是单一模块，而是几层协议组合：
   - `system`
   - `result`
   - `control_response`
+- 当工具权限策略返回 `ask` 时，harness 会输出：
 
-当前 deliberately 不实现远程 WebSocket，也不实现外部 permission handoff。原因是 morty-code 的权限层刚刚补齐，先把本地稳定 JSONL 协议跑通，再接远端传输更稳。
+```json
+{"type":"control_request","request_id":"...","request":{"subtype":"can_use_tool","tool_name":"bash","input":{"command":"git push"},"tool_use_id":"..."}}
+```
+
+宿主需要回写：
+
+```json
+{"type":"control_response","response":{"subtype":"success","request_id":"...","response":{"behavior":"allow"}}}
+```
+
+或：
+
+```json
+{"type":"control_response","response":{"subtype":"success","request_id":"...","response":{"behavior":"deny","message":"not allowed"}}}
+```
+
+当前 deliberately 不实现远程 WebSocket。原因是 morty-code 的权限层刚刚补齐，先把本地稳定 JSONL 协议跑通，再接远端传输更稳。
 
 ## 后续深挖方向
 
-1. **can_use_tool control_request**：当本地 policy 返回 ask 时，把审批请求发给 harness 宿主，而不是直接拒绝。
-2. **session replay**：启动 harness 时可选择 replay 当前 transcript。
-3. **remote bridge**：在本地 stream-json 之上加 WebSocket transport。
-4. **interrupt 真取消**：把 QueryEngine turn 变成可取消任务，而不是当前同步占用。
-5. **tool progress event**：工具开始、结束、失败都输出结构化事件，方便 UI 展示。
+1. **session replay**：启动 harness 时可选择 replay 当前 transcript。
+2. **remote bridge**：在本地 stream-json 之上加 WebSocket transport。
+3. **interrupt 真取消**：把 QueryEngine turn 变成可取消任务，而不是当前同步占用。
+4. **tool progress event**：工具开始、结束、失败都输出结构化事件，方便 UI 展示。
+5. **permission update persistence**：宿主批准后可选择写入 session / local permission rule。
