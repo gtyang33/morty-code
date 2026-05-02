@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from inspect import isawaitable
 from uuid import uuid4
 
@@ -98,7 +98,7 @@ class ToolRunner:
         return [
             Message(
                 uuid=str(uuid4()),
-                timestamp=datetime.utcnow().isoformat(),
+                timestamp=datetime.now(UTC).isoformat(),
                 type="user",
                 payload={"content": results},
                 is_meta=True,
