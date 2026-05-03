@@ -39,6 +39,10 @@ Claude Code 的工具不是简单函数列表，而是一套完整协议：
 - `grep_text`：用 Python regex 搜索文件内容，支持 content/files/count 三种输出模式。
 - `write_file`：创建或覆盖文件；覆盖已有文件前必须完整 read。
 - `edit_file`：精确字符串替换；要求先完整 read，默认要求 old_string 唯一。
+- `multi_edit`：一次应用多个精确字符串替换；同样要求先完整 read，逐条检查 old_string。
+- `file_info`：读取文件/目录元数据。
+- `create_dir`：创建目录，走写入安全检查。
+- `move_path`：移动/重命名文件或目录，源和目标都走写入安全检查，目标必须不存在。
 - `bash`：在 workspace root 下执行 shell 命令，带超时和 stdout/stderr 截断。
 - `todo_write`：维护当前 session 的 todo list。
 
@@ -50,3 +54,4 @@ Claude Code 的工具不是简单函数列表，而是一套完整协议：
 - 图片/PDF/notebook 读取。
 - LSP、MCP、Web 工具。
 - 结构化 diff hunk 和 IDE 诊断。
+- 删除/清理类工具。需要先补回收站或更细审批，否则破坏面过大。

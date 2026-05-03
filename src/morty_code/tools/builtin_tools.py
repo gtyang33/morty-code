@@ -163,6 +163,34 @@ def create_local_tool_registry(
             "truncated": len(filenames) >= limit or len(content_lines) >= limit,
         }
 
+    async def file_info(args: dict[str, object]) -> dict[str, object]:
+        path = _resolve_under_root(root, str(args.get("path", "")))
+        assert_safe_read_path(root, path)
+        stat = path.stat()
+        return {
+            "path": str(path),
+            "kind": "directory" if path.is_dir() else "file",
+            "size_bytes": stat.st_size,
+            "mtime_ms": int(stat.st_mtime * 1000),
+            "readonly": not os.access(path, os.W_OK),
+        }
+
+    async def create_dir(
+        args: dict[str, object],
+        _context: ToolUseContext,
+        _cache_safe: CacheSafeParams,
+    ) -> dict[str, object]:
+        path = _resolve_for_write(root, str(args.get("path", "")))
+        assert_safe_write_path(root, path)
+        existed = path.exists()
+        if existed and not path.is_dir():
+            raise FileExistsError(str(path))
+        path.mkdir(parents=bool(args.get("parents", True)), exist_ok=True)
+        return {
+            "path": str(path),
+            "operation": "exists" if existed else "create",
+        }
+
     async def write_file(
         args: dict[str, object],
         context: ToolUseContext,
@@ -223,6 +251,71 @@ def create_local_tool_registry(
             "path": str(path),
             "replacements": count if replace_all else 1,
             "diff": _simple_diff(original, updated),
+        }
+
+    async def multi_edit(
+        args: dict[str, object],
+        context: ToolUseContext,
+        _cache_safe: CacheSafeParams,
+    ) -> dict[str, object]:
+        path = _resolve_under_root(root, str(args.get("path", "")))
+        assert_safe_write_path(root, path)
+        edits = args.get("edits")
+        if not isinstance(edits, list) or not edits:
+            raise ValueError("edits must be a non-empty list")
+        _ensure_fresh_read(path, context)
+        original = path.read_text(encoding="utf-8", errors="replace")
+        updated = original
+        applied: list[dict[str, object]] = []
+        for index, edit in enumerate(edits):
+            if not isinstance(edit, dict):
+                raise ValueError(f"edit {index} must be an object")
+            old = str(edit.get("old_string", ""))
+            new = str(edit.get("new_string", ""))
+            replace_all = bool(edit.get("replace_all") is True)
+            if not old:
+                raise ValueError(f"edit {index} old_string is required")
+            if old == new:
+                raise ValueError(f"edit {index} old_string and new_string are identical")
+            count = updated.count(old)
+            if count == 0:
+                raise ValueError(f"edit {index} old_string not found")
+            if count > 1 and not replace_all:
+                raise ValueError(
+                    f"edit {index} old_string appears {count} times; set replace_all=true or make it unique"
+                )
+            updated = updated.replace(old, new) if replace_all else updated.replace(old, new, 1)
+            applied.append({"index": index, "replacements": count if replace_all else 1})
+        path.write_text(updated, encoding="utf-8")
+        context.read_file_state[str(path)] = FileViewState(
+            path=str(path),
+            content=updated[:max_read_chars],
+            timestamp=path.stat().st_mtime * 1000,
+            is_partial_view=len(updated) > max_read_chars,
+        )
+        return {
+            "path": str(path),
+            "edits": applied,
+            "diff": _simple_diff(original, updated),
+        }
+
+    async def move_path(
+        args: dict[str, object],
+        _context: ToolUseContext,
+        _cache_safe: CacheSafeParams,
+    ) -> dict[str, object]:
+        source = _resolve_under_root(root, str(args.get("source", "")))
+        destination = _resolve_for_write(root, str(args.get("destination", "")))
+        assert_safe_write_path(root, source)
+        assert_safe_write_path(root, destination)
+        if destination.exists():
+            raise FileExistsError(str(destination))
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        source.rename(destination)
+        return {
+            "source": str(source),
+            "destination": str(destination),
+            "operation": "move",
         }
 
     async def bash(
@@ -359,6 +452,32 @@ def create_local_tool_registry(
                 },
             ),
             ToolSpec(
+                name="file_info",
+                description="Return metadata for a file or directory under the workspace root.",
+                handler=file_info,
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Relative path under the workspace root."},
+                    },
+                    "required": ["path"],
+                },
+            ),
+            ToolSpec(
+                name="create_dir",
+                description="Create a directory under the workspace root.",
+                handler=create_dir,
+                needs_context=True,
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Relative directory path under the workspace root."},
+                        "parents": {"type": "boolean", "default": True},
+                    },
+                    "required": ["path"],
+                },
+            ),
+            ToolSpec(
                 name="write_file",
                 description="Create or overwrite a UTF-8 file under the workspace root. Existing files must be read first.",
                 handler=write_file,
@@ -386,6 +505,45 @@ def create_local_tool_registry(
                         "replace_all": {"type": "boolean", "default": False},
                     },
                     "required": ["path", "old_string", "new_string"],
+                },
+            ),
+            ToolSpec(
+                name="multi_edit",
+                description="Apply multiple exact text replacements to a file under the workspace root. File must be read first.",
+                handler=multi_edit,
+                needs_context=True,
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Relative file path under the workspace root."},
+                        "edits": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "old_string": {"type": "string"},
+                                    "new_string": {"type": "string"},
+                                    "replace_all": {"type": "boolean", "default": False},
+                                },
+                                "required": ["old_string", "new_string"],
+                            },
+                        },
+                    },
+                    "required": ["path", "edits"],
+                },
+            ),
+            ToolSpec(
+                name="move_path",
+                description="Move or rename a file or directory under the workspace root. Destination must not exist.",
+                handler=move_path,
+                needs_context=True,
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "source": {"type": "string", "description": "Existing relative path under the workspace root."},
+                        "destination": {"type": "string", "description": "New relative path under the workspace root."},
+                    },
+                    "required": ["source", "destination"],
                 },
             ),
             ToolSpec(
