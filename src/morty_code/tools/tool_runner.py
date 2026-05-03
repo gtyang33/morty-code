@@ -5,6 +5,7 @@ from inspect import isawaitable
 from uuid import uuid4
 
 from morty_code.security import PermissionDecision, evaluate_tool_permission
+from morty_code.tools.schema_validation import ToolInputValidationError, validate_tool_input
 from morty_code.tools.tool_registry import ToolRegistry
 from morty_code.types.messages import Message
 from morty_code.types.runtime_state import CacheSafeParams, ToolUseContext
@@ -62,6 +63,26 @@ class ToolRunner:
                 )
                 continue
             tool_input = dict(tool_use.get("input") or {})
+            try:
+                validate_tool_input(name, tool.input_schema, tool_input)
+            except ToolInputValidationError as exc:
+                self._record_tool_event(
+                    context,
+                    {
+                        "phase": "validation_error",
+                        "tool_name": name,
+                        "tool_use_id": tool_use_id,
+                        "error": str(exc),
+                    },
+                )
+                results.append(
+                    self._tool_result(
+                        tool_use,
+                        content=f"<tool_use_error>{exc}</tool_use_error>",
+                        is_error=True,
+                    )
+                )
+                continue
             decision = evaluate_tool_permission(name, tool_input, context)
             self._record_tool_event(
                 context,

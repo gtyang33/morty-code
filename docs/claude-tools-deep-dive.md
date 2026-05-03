@@ -61,6 +61,7 @@ Claude Code 的 `toolExecution.ts` 把一次工具调用拆成多个阶段：
 
 morty-code 本轮先复刻第 3、5、7 点的“结构化轨迹”：
 
+- 执行前按 tool schema 做轻量输入校验，失败回灌 `InputValidationError`。
 - 权限 allow/ask/deny 写入 metadata。
 - 外部 harness 审批后的最终决策写入 metadata。
 - 工具 start/success/error 写入 metadata。
