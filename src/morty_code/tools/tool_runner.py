@@ -42,8 +42,17 @@ class ToolRunner:
         results: list[dict[str, object]] = []
         for tool_use in tool_uses:
             name = str(tool_use.get("name", ""))
+            tool_use_id = str(tool_use.get("id") or "")
             tool = self.registry.find(name)
             if tool is None or name not in context.tools:
+                self._record_tool_event(
+                    context,
+                    {
+                        "phase": "unavailable",
+                        "tool_name": name,
+                        "tool_use_id": tool_use_id,
+                    },
+                )
                 results.append(
                     self._tool_result(
                         tool_use,
@@ -54,6 +63,17 @@ class ToolRunner:
                 continue
             tool_input = dict(tool_use.get("input") or {})
             decision = evaluate_tool_permission(name, tool_input, context)
+            self._record_tool_event(
+                context,
+                {
+                    "phase": "permission",
+                    "tool_name": name,
+                    "tool_use_id": tool_use_id,
+                    "behavior": decision.behavior,
+                    "reason": decision.reason,
+                    "message": decision.message,
+                },
+            )
             if decision.behavior == "ask":
                 decision = await self._request_external_permission(
                     tool_name=name,
@@ -64,7 +84,29 @@ class ToolRunner:
                 )
                 if decision.updated_input is not None:
                     tool_input = dict(decision.updated_input)
+                self._record_tool_event(
+                    context,
+                    {
+                        "phase": "permission",
+                        "tool_name": name,
+                        "tool_use_id": tool_use_id,
+                        "behavior": decision.behavior,
+                        "reason": decision.reason,
+                        "message": decision.message,
+                        "external": True,
+                    },
+                )
             if decision.behavior != "allow":
+                self._record_tool_event(
+                    context,
+                    {
+                        "phase": "blocked",
+                        "tool_name": name,
+                        "tool_use_id": tool_use_id,
+                        "reason": decision.reason,
+                        "message": decision.message,
+                    },
+                )
                 results.append(
                     self._tool_result(
                         tool_use,
@@ -77,6 +119,15 @@ class ToolRunner:
                 )
                 continue
             try:
+                started = datetime.now(UTC)
+                self._record_tool_event(
+                    context,
+                    {
+                        "phase": "start",
+                        "tool_name": name,
+                        "tool_use_id": tool_use_id,
+                    },
+                )
                 if tool.needs_context:
                     if cache_safe is None:
                         raise RuntimeError("cache_safe context is required for this tool")
@@ -84,8 +135,26 @@ class ToolRunner:
                 else:
                     payload = await tool.handler(tool_input)
                 content = self._maybe_replace_large_result(tool_use, payload, context)
+                self._record_tool_event(
+                    context,
+                    {
+                        "phase": "success",
+                        "tool_name": name,
+                        "tool_use_id": tool_use_id,
+                        "duration_ms": int((datetime.now(UTC) - started).total_seconds() * 1000),
+                    },
+                )
                 results.append(self._tool_result(tool_use, content=content, is_error=False))
             except Exception as exc:  # noqa: BLE001 - 工具异常必须进入 transcript，不能丢失。
+                self._record_tool_event(
+                    context,
+                    {
+                        "phase": "error",
+                        "tool_name": name,
+                        "tool_use_id": tool_use_id,
+                        "error": str(exc),
+                    },
+                )
                 results.append(
                     self._tool_result(
                         tool_use,
@@ -167,6 +236,22 @@ class ToolRunner:
             "content": content,
             "is_error": is_error,
         }
+
+    def _record_tool_event(
+        self,
+        context: ToolUseContext,
+        event: dict[str, object],
+    ) -> None:
+        events = context.app_state.setdefault("tool_execution_events", [])
+        if not isinstance(events, list):
+            return
+        events.append(
+            {
+                "type": "tool_execution",
+                "timestamp": datetime.now(UTC).isoformat(),
+                **event,
+            }
+        )
 
     def _maybe_replace_large_result(
         self,

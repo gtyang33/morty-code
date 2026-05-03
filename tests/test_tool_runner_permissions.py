@@ -76,6 +76,14 @@ def test_tool_runner_uses_external_permission_allow_with_updated_input() -> None
     assert tool_result["is_error"] is False
     assert tool_result["content"] == {"received": "changed"}
     assert seen_payloads == [{"value": "changed"}]
+    events = context.app_state["tool_execution_events"]
+    assert [event["phase"] for event in events] == [
+        "permission",
+        "permission",
+        "start",
+        "success",
+    ]
+    assert events[1]["external"] is True
 
 
 def test_tool_runner_turns_external_permission_deny_into_tool_error() -> None:
@@ -100,3 +108,40 @@ def test_tool_runner_turns_external_permission_deny_into_tool_error() -> None:
     tool_result = result_messages[0].payload["content"][0]
     assert tool_result["is_error"] is True
     assert "host denied" in tool_result["content"]
+    events = context.app_state["tool_execution_events"]
+    assert [event["phase"] for event in events] == [
+        "permission",
+        "permission",
+        "blocked",
+    ]
+
+
+def test_tool_runner_records_unavailable_tool_event() -> None:
+    registry = ToolRegistry([])
+    context = ToolUseContext(
+        tools=["missing"],
+        model="test-model",
+        permission_mode="default",
+        app_state={},
+        read_file_state={},
+        content_replacement_state=ContentReplacementState(),
+    )
+    message = Message(
+        uuid="assistant-1",
+        timestamp="2026-05-03T00:00:00",
+        type="assistant",
+        payload={
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "tool-1",
+                    "name": "missing",
+                    "input": {},
+                }
+            ]
+        },
+    )
+
+    asyncio.run(ToolRunner(registry).run(message, context, make_cache()))
+
+    assert context.app_state["tool_execution_events"][0]["phase"] == "unavailable"

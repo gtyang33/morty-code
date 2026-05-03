@@ -148,6 +148,9 @@ class QueryLoop:
             working_messages.append(assistant_message)
 
             tool_messages = await self.tool_runner.run(assistant_message, tool_context, cache_safe)
+            tool_events = tool_context.app_state.pop("tool_execution_events", [])
+            if isinstance(tool_events, list):
+                metadata_events.extend(event for event in tool_events if isinstance(event, dict))
             if not tool_messages:
                 break
             new_messages.extend(tool_messages)

@@ -45,6 +45,26 @@ Claude Code 的工具不是简单函数列表，而是一套完整协议：
 - `move_path`：移动/重命名文件或目录，源和目标都走写入安全检查，目标必须不存在。
 - `bash`：在 workspace root 下执行 shell 命令，带超时和 stdout/stderr 截断。
 - `todo_write`：维护当前 session 的 todo list。
+- ToolRunner 现在会记录结构化 `tool_execution` metadata event，包括 unavailable、permission、blocked、start、success、error。
+
+## Tool Execution 实现细节深挖
+
+Claude Code 的 `toolExecution.ts` 把一次工具调用拆成多个阶段：
+
+1. 找工具：支持真实工具、MCP 工具、旧工具别名回退。
+2. 参数校验：模型生成的参数先过 schema，失败会回灌 tool_result error。
+3. 权限判断：先 deny / ask / mode，再进入工具自身 checkPermissions。
+4. 用户阻塞态：permission prompt、hook、classifier 等阶段会产生 progress 或 tracing span。
+5. 真正执行：执行前后记录 duration、telemetry、hook。
+6. 结果映射：工具原始结果会转换成稳定 tool_result，并可做大结果落盘。
+7. 失败处理：未知工具、权限拒绝、异常、取消都会变成 transcript 里的 tool_result。
+
+morty-code 本轮先复刻第 3、5、7 点的“结构化轨迹”：
+
+- 权限 allow/ask/deny 写入 metadata。
+- 外部 harness 审批后的最终决策写入 metadata。
+- 工具 start/success/error 写入 metadata。
+- QueryLoop 每轮 tool_runner 后把这些事件排入 transcript metadata event。
 
 仍未实现：
 
