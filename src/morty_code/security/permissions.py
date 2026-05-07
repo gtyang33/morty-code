@@ -55,6 +55,8 @@ def evaluate_tool_permission(
     mode = str(context.permission_mode or context.app_state.get("permission_mode") or "default")
 
     command = str(tool_input.get("command", "")).strip() if tool_name == "bash" else ""
+    # Bash 支持内容级规则，例如 Bash(git push:*)。先看内容规则，再看工具名
+    # 规则，才能表达“允许 Bash，但某些命令仍 deny/ask”。
     content_deny = _matches_content_rule(denied, tool_name, command)
     if content_deny or _matches_tool_rule(denied, tool_name):
         return PermissionDecision(
@@ -76,12 +78,15 @@ def evaluate_tool_permission(
             message=f"Tool '{tool_name}' requires approval by configured permission rule.",
         )
     if mode == "bypassPermissions":
+        # bypass 只跳过权限弹窗，不跳过工具自身安全 guard；例如 write_file 仍会
+        # 拒绝写 .env，bash 仍会经过危险命令检查。
         return PermissionDecision("allow", "mode", "bypassPermissions allows tool execution.")
     content_allow = _matches_content_rule(allowed, tool_name, command)
     if content_allow or _matches_tool_rule(allowed, tool_name):
         return PermissionDecision("allow", "rule", f"Tool '{tool_name}' explicitly allowed{_rule_suffix(content_allow)}.")
 
     if mode == "plan" or bool(context.app_state.get("plan_mode", False)):
+        # plan mode 是只读规划状态，禁止写文件/执行命令/启动可能改动代码的子代理。
         if tool_name in _MUTATING_TOOLS:
             return PermissionDecision(
                 behavior="deny",

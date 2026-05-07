@@ -45,6 +45,8 @@ class ToolRunner:
             name = str(tool_use.get("name", ""))
             tool_use_id = str(tool_use.get("id") or "")
             tool = self.registry.find(name)
+            # 模型可能幻觉工具名，或者当前 permission/plan mode 临时裁剪了工具集。
+            # 这种情况不能抛异常中断对话，而是回灌一个 tool_result，让模型自我修正。
             if tool is None or name not in context.tools:
                 self._record_tool_event(
                     context,
@@ -64,6 +66,8 @@ class ToolRunner:
                 continue
             tool_input = dict(tool_use.get("input") or {})
             try:
+                # schema 校验必须早于权限请求，否则用户可能被要求批准一个
+                # 后续一定会失败的工具调用。
                 validate_tool_input(name, tool.input_schema, tool_input)
             except ToolInputValidationError as exc:
                 self._record_tool_event(
@@ -84,6 +88,7 @@ class ToolRunner:
                 )
                 continue
             decision = evaluate_tool_permission(name, tool_input, context)
+            # 权限决策也作为 metadata event 记录，方便事后解释“为什么工具没执行”。
             self._record_tool_event(
                 context,
                 {
@@ -96,6 +101,8 @@ class ToolRunner:
                 },
             )
             if decision.behavior == "ask":
+                # harness/外部 UI 可以在批准时改写 input，例如修正 bash 命令或
+                # 限制文件路径；ToolRunner 必须使用批准后的 updated_input。
                 decision = await self._request_external_permission(
                     tool_name=name,
                     tool_input=tool_input,
@@ -150,11 +157,15 @@ class ToolRunner:
                     },
                 )
                 if tool.needs_context:
+                    # 需要 context 的工具可以访问 read_file_state、permission state、
+                    # subagent dirs 等 runtime 状态；普通纯函数工具保持简单签名。
                     if cache_safe is None:
                         raise RuntimeError("cache_safe context is required for this tool")
                     payload = await tool.handler(tool_input, context, cache_safe)
                 else:
                     payload = await tool.handler(tool_input)
+                # 单个工具返回可能非常大，先在工具层做一次替换，后续 QueryLoop
+                # 还会按整轮 aggregate budget 做稳定替换。
                 content = self._maybe_replace_large_result(tool_use, payload, context)
                 self._record_tool_event(
                     context,

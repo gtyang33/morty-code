@@ -65,11 +65,14 @@ _DANGEROUS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 
 
 def assert_safe_read_path(root: Path, path: Path) -> None:
+    # read_file/list_dir 的第一道边界：所有路径都必须落在 workspace root 内。
     _assert_under_root(root, path)
 
 
 def assert_safe_write_path(root: Path, path: Path) -> None:
     _assert_under_root(root, path)
+    # 写操作额外保护敏感目录和 morty 自己的内部状态。即使 permission mode 是
+    # bypassPermissions，也不能让模型覆盖 transcript、任务状态或凭据文件。
     lowered_parts = {part.lower() for part in path.parts}
     if lowered_parts & _SENSITIVE_DIR_NAMES:
         raise SecurityViolation(f"writing sensitive directory is blocked: {path}")
@@ -90,6 +93,8 @@ def assert_safe_bash_command(
 ) -> None:
     if allow_dangerous:
         return
+    # 先用正则拦截最常见的灾难性命令，再用 shlex 拆分后逐段检查。
+    # 这不是完整 shell parser，但能覆盖本地 agent 最容易误触的高风险操作。
     for pattern, reason in _DANGEROUS_PATTERNS:
         if pattern.search(command):
             raise SecurityViolation(f"blocked bash command: {reason}")
@@ -115,6 +120,8 @@ def _assert_under_root(root: Path, path: Path) -> None:
 
 
 def _split_command_segments(tokens: list[str]) -> list[list[str]]:
+    # 只按常见 shell 控制符拆段；每段第一个 token 作为 executable 检查。
+    # 更复杂的重定向/子 shell 已在上层权限规则中按原始 command 审计。
     segments: list[list[str]] = [[]]
     for token in tokens:
         if token in {";", "&&", "||", "|"}:
@@ -125,6 +132,8 @@ def _split_command_segments(tokens: list[str]) -> list[list[str]]:
 
 
 def _check_removal(args: list[str], root: Path) -> None:
+    # rm/rmdir 允许删除普通工作区文件，但拒绝根目录、当前目录、workspace root
+    # 以及通配整目录这类无法安全恢复的目标。
     positional = [arg for arg in args if not arg.startswith("-")]
     if not positional:
         return

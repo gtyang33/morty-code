@@ -57,6 +57,9 @@ class QueryEngine:
         pasted_contents: dict[int, dict[str, object]] | None = None,
         on_new_messages: Callable[[list[Message]], None] | None = None,
     ) -> list[Message]:
+        # 输入层可能把一条用户输入拆成多条队列命令：普通 prompt、slash
+        # command、由 slash command 生成的 follow-up prompt 都走同一条管线。
+        # 这样 transcript 中看到的是统一消息流，而不是多个旁路入口。
         queued_commands = await self.input_dispatcher.submit(
             raw_input=raw_input,
             mode="prompt",
@@ -79,6 +82,8 @@ class QueryEngine:
         index = 0
         while queued_commands:
             command = queued_commands.pop(0)
+            # 只有第一条命令注入 @file、memory 等输入附件。后续由系统生成的
+            # next_input 不重复注入，避免同一附件在一轮里膨胀多次。
             processed = await self.input_processor.process(
                 command=command,
                 context=tool_context,
@@ -94,6 +99,8 @@ class QueryEngine:
             if processed.model is not None:
                 tool_context.model = processed.model
             if processed.next_input is not None:
+                # slash command 可以把用户输入改写成下一条 prompt，例如 /compact
+                # 或 plan mode 的隐式指令。这里重新入队，保持执行顺序可恢复。
                 self.queue_manager.enqueue(
                     type(command)(
                         value=processed.next_input,
@@ -110,6 +117,8 @@ class QueryEngine:
         if new_messages:
             await self.transcript_store.append_messages(new_messages)
         if should_compact:
+            # 手动 compact 是本地状态迁移，不需要再请求模型普通回答；成功后
+            # 直接返回 compact 产生的 summary/reinjection 消息。
             compact_messages = await self._maybe_compact(tool_context, force=True, trigger="manual")
             if compact_messages:
                 await self.transcript_store.append_event(
@@ -135,11 +144,15 @@ class QueryEngine:
             return new_messages
 
         await self._maybe_compact(tool_context)
+        # compact 后只发送 boundary 之后的上下文，避免已经被摘要覆盖的旧消息
+        # 再次进入 prompt，造成 token 浪费或工具配对重复。
         messages_for_query = self._messages_after_compact_boundary()
         system_prompt, user_context, system_context = await self.prompt_builder.build_for_context(
             tool_context
         )
         try:
+            # QueryLoop 会在模型/工具之间多轮往返；on_new_messages 用于 CLI
+            # 实时打印，不改变 transcript 的最终 append-only 语义。
             result = await self.query_loop.run(
                 messages=messages_for_query,
                 cache_safe=CacheSafeParams(
@@ -164,6 +177,8 @@ class QueryEngine:
             await self.transcript_store.append_messages([error_message])
             return [error_message]
         self.messages.extend(result.new_messages)
+        # metadata event 与 message 分开追加：event 用于诊断和恢复辅助，不会
+        # 进入下一轮模型上下文。
         for event in result.metadata_events:
             await self.transcript_store.append_event(event)
         if result.new_messages:

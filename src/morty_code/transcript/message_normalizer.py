@@ -402,6 +402,8 @@ class MessageNormalizer:
         while index < len(messages):
             message = messages[index]
             if message.type == "assistant":
+                # OpenAI/Anthropic 都要求 assistant tool_use 后紧跟对应 tool_result。
+                # transcript 可能因为中断、恢复或手工编辑出现缺口，这里在 API 前修复。
                 content = message.payload.get("content")
                 if not isinstance(content, list):
                     output.append(message)
@@ -415,6 +417,8 @@ class MessageNormalizer:
                     if block.get("type") == "tool_use":
                         tool_use_id = str(block.get("id", ""))
                         if not tool_use_id or tool_use_id in seen_tool_use_ids:
+                            # 重复 tool_use id 会让 provider 拒绝请求；删除重复块比
+                            # 保留坏结构更可恢复，修复动作会写 metadata event。
                             self.last_report.record("duplicate-tool-use-stripped")
                             continue
                         seen_tool_use_ids.add(tool_use_id)
@@ -427,6 +431,8 @@ class MessageNormalizer:
                 output.append(assistant_message)
                 next_message = messages[index + 1] if index + 1 < len(messages) else None
                 if assistant_tool_use_ids:
+                    # 如果下一条 user 消息缺少某个 tool_result，合成一个错误结果。
+                    # 这样模型能看到“工具被中断”，而不是 API 直接报结构错误。
                     existing_ids = self._tool_result_ids(
                         next_message.payload.get("content")
                         if next_message and next_message.type == "user"

@@ -28,6 +28,8 @@ class DurableMemoryStore:
         clean = " ".join(summary.strip().split())
         if not clean:
             return
+        # durable memory 写两份：topic 文件保存完整条目，MEMORY.md 只保存索引。
+        # prompt 注入时优先读索引，避免长期记忆无限膨胀。
         topic_path = self._topic_path(clean)
         with topic_path.open("a", encoding="utf-8") as file:
             file.write(f"- {clean}\n")
@@ -40,11 +42,14 @@ class DurableMemoryStore:
         return self.index_path.read_text(encoding="utf-8")
 
     def _topic_path(self, summary: str) -> Path:
+        # 用摘要前几个词生成稳定 topic 文件名；中英文都保留，便于人工查看。
         words = re.findall(r"[A-Za-z0-9\u4e00-\u9fff]+", summary.lower())[:8]
         stem = "-".join(words)[:80] or "memory"
         return self.root_dir / f"{stem}.md"
 
     def _truncate_index(self) -> None:
+        # MEMORY.md 是 prompt 热路径的一部分，必须同时限制行数和字节数；
+        # 老条目仍在 topic 文件里，只是从索引里淘汰。
         content = self.index_path.read_text(encoding="utf-8")
         lines = content.splitlines()
         if len(lines) <= self.max_index_lines and len(content.encode("utf-8")) <= self.max_index_bytes:

@@ -55,6 +55,8 @@ def apply_tool_result_budget(
     to_persist: list[ToolResultCandidate] = []
 
     for group in _collect_candidates_by_wire_message(messages):
+        # budget 按“最终会发给 API 的 user message group”计算，而不是按单个
+        # tool_result 计算；这样能控制一次 tool 回灌整体不会超过 provider 限制。
         must_reapply, frozen, fresh = _partition_by_prior_decision(group, state)
         for candidate, replacement in must_reapply:
             replacement_map[candidate.tool_use_id] = replacement
@@ -78,6 +80,8 @@ def apply_tool_result_budget(
         ]
 
         frozen_size = sum(candidate.size for candidate in frozen)
+        # frozen 是历史上已决定保留完整文本的结果，不能为了本轮预算突然改写；
+        # 只有 fresh 候选可以被选中持久化到 .morty/tool-results。
         selected = (
             _select_largest_until_under_budget(eligible, frozen_size, limit)
             if frozen_size + sum(candidate.size for candidate in eligible) > limit
@@ -92,6 +96,8 @@ def apply_tool_result_budget(
     if to_persist:
         Path(tool_results_dir).mkdir(parents=True, exist_ok=True)
     for candidate in to_persist:
+        # 完整内容落盘，prompt 中只保留稳定占位符。用户需要时仍可从
+        # .morty/tool-results/<tool_use_id>.txt 查看原始结果。
         replacement = _persist_and_build_replacement(candidate, tool_results_dir)
         state.seen_ids.add(candidate.tool_use_id)
         state.replacements[candidate.tool_use_id] = replacement

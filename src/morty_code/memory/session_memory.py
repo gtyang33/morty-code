@@ -14,6 +14,8 @@ class SessionMemoryStore:
         clean = note.strip()
         if not clean:
             return
+        # session memory 是当前会话的轻量工作笔记，适合保存“本轮任务里刚发现”
+        # 的事实；它和 durable memory 分开，避免临时噪声长期污染全局记忆。
         if not self.path.exists():
             self.path.write_text("# Session Memory\n", encoding="utf-8")
         with self.path.open("a", encoding="utf-8") as file:

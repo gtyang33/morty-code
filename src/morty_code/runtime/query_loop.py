@@ -71,6 +71,9 @@ class QueryLoop:
         iteration_limit = self.max_iterations if max_iterations is None else max(1, max_iterations)
         hit_iteration_limit_with_tools = False
         for _ in range(iteration_limit):
+            # 大 tool_result 在进入下一次模型请求前做稳定替换。替换记录保存在
+            # content_replacement_state，确保同一个 tool_use_id 后续恢复时仍使用
+            # 同一个占位文本，而不是每轮重新决定。
             working_messages, replacement_records = apply_tool_result_budget(
                 working_messages,
                 tool_context.content_replacement_state,
@@ -98,6 +101,9 @@ class QueryLoop:
                 cache_safe.system_context.get("tool_schemas_json"),
                 metadata_events,
             )
+            # prompt cache 规划默认只记录在 runtime 内部；只有 send_cache_control
+            # 打开时才把 cache_control 字段发给兼容网关，避免普通 OpenAI-compatible
+            # 服务因为不认识扩展字段而 400。
             cache_plan = PromptCachePlanner(
                 enable_prompt_caching=bool(tool_context.app_state.get("enable_prompt_caching", True)),
                 use_global_scope=bool(tool_context.app_state.get("use_global_prompt_cache_scope", True)),
@@ -123,6 +129,8 @@ class QueryLoop:
             if tool_context.app_state.get("send_cache_control"):
                 request_messages = cache_plan["messages"]
                 request_system_context["tool_schemas_json"] = self._json_dumps(cache_plan["tool_schemas"])
+            # 每次 respond 返回一个 assistant message。它可能是普通文本，也可能
+            # 是一组 tool_use；工具结果会被回灌成 user/tool_result 后进入下一轮。
             assistant_message = await self._respond_with_retries(
                 messages=request_messages,
                 fallback_messages=api_messages,
@@ -153,6 +161,8 @@ class QueryLoop:
             self._emit_new_messages(on_new_messages, [assistant_message])
 
             tool_messages = await self.tool_runner.run(assistant_message, tool_context, cache_safe)
+            # ToolRunner 把权限、启动、成功/失败等事件临时塞到 app_state。
+            # QueryLoop 在这里 drain 成 metadata event，避免污染 prompt 状态。
             tool_events = tool_context.app_state.pop("tool_execution_events", [])
             if isinstance(tool_events, list):
                 metadata_events.extend(event for event in tool_events if isinstance(event, dict))
@@ -162,6 +172,9 @@ class QueryLoop:
             working_messages.extend(tool_messages)
             self._emit_new_messages(on_new_messages, tool_messages)
         else:
+            # for-else 只有在没有 break 的情况下触发：说明达到了工具迭代上限。
+            # 如果最后一条 assistant 仍包含 tool_use，需要再做一次无工具总结，
+            # 否则用户会只看到最后一批 tool_result，没有结论。
             hit_iteration_limit_with_tools = bool(
                 assistant_message is not None
                 and self._message_has_tool_uses(assistant_message)
@@ -179,6 +192,8 @@ class QueryLoop:
             new_messages.extend(final_messages)
             working_messages.extend(final_messages)
             self._emit_new_messages(on_new_messages, final_messages)
+        # post-iteration attachment 用于 date_change、plan 状态、memory re-inject
+        # 等“本轮结束后才知道”的上下文，进入 transcript 但通常不会立刻展示。
         post_attachments = await self.attachment_manager.collect_post_iteration(
             input_text="",
             context=tool_context,
@@ -209,6 +224,8 @@ class QueryLoop:
     ) -> list[Message]:
         """工具迭代耗尽后追加一次无工具总结，避免 CLI 停在 tool_result。"""
 
+        # 这条 meta user message 不代表真实用户输入，只是给模型一个明确边界：
+        # 不允许继续调用工具，必须基于已获得事实收束回答。
         metadata_events.append(
             {
                 "type": "tool-iteration-limit-finalize",

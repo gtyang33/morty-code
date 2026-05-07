@@ -91,6 +91,8 @@ class OpenAICompatibleModelClient:
     ) -> Message:
         if not self.api_key:
             raise RuntimeError("OPENAI_API_KEY is required for openai-compatible provider")
+        # runtime 内部用 Anthropic-like content block；这里统一转换成
+        # OpenAI Chat Completions wire format，保证上层不需要关心具体 provider。
         wire_messages = self._normalize_wire_messages([
             {
                 "role": "system",
@@ -106,6 +108,8 @@ class OpenAICompatibleModelClient:
             ),
             ensure_ascii=False,
         ).encode("utf-8")
+        # 标准库 urllib 是同步阻塞 API，但外层仍保持 async 接口，方便以后替换
+        # 成真正的 streaming/httpx client 时不改变 QueryLoop 协议。
         request = urllib.request.Request(
             url=f"{self.base_url}/chat/completions",
             data=body,
@@ -119,6 +123,8 @@ class OpenAICompatibleModelClient:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
+            # HTTP 错误保留 status/detail/retry-after，QueryLoop 会基于这些字段
+            # 决定是否重试、是否降级 cache_control。
             detail = exc.read().decode("utf-8", errors="replace")
             retry_after = _parse_retry_after(exc.headers.get("retry-after"))
             raise ModelProviderError(
@@ -128,6 +134,8 @@ class OpenAICompatibleModelClient:
                 retry_after=retry_after,
             ) from exc
         except (socket.timeout, TimeoutError) as exc:
+            # socket.timeout 在不同 Python/平台上可能表现为 socket.timeout、
+            # TimeoutError 或 URLError.reason；统一成可诊断的秒数信息。
             raise ModelProviderError(
                 f"model provider request timed out after {self.timeout:g}s",
                 detail=f"request timed out after {self.timeout:g}s",
@@ -142,6 +150,8 @@ class OpenAICompatibleModelClient:
             ) from exc
         choice = payload.get("choices", [{}])[0].get("message", {})
         message = self._message_from_choice(choice)
+        # usage 不参与模型下一轮语义，但保留在 payload 里供 prompt cache 统计、
+        # transcript 诊断和用户排查 token 膨胀问题。
         if isinstance(payload.get("usage"), dict):
             message.payload["usage"] = payload["usage"]
         return message

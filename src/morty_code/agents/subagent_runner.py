@@ -64,6 +64,8 @@ class SubagentRunner:
         had_tool_schemas = "tool_schemas" in parent_context.app_state
         original_schemas = parent_context.app_state.get("tool_schemas")
         try:
+            # 子代理只能看到它被允许使用的工具。比如 Explore/Plan 默认只读，
+            # verification 可跑 bash，但 general-purpose 仍会继承父级权限策略。
             parent_context.tools = allowed_tools
             parent_context.app_state["tool_schemas"] = self.tool_registry.api_tool_schemas(set(allowed_tools))
             await self._append_lifecycle_event(
@@ -85,6 +87,8 @@ class SubagentRunner:
                 allowed_tools=allowed_tools,
             )
             prompt_message = self._prompt_message(prompt, definition)
+            # ForkedAgentRunner 会复制 mutable state，子代理读文件、compact、
+            # prompt cache 状态不会直接污染父代理；最终只返回摘要结果。
             runner = ForkedAgentRunner(
                 self.query_loop,
                 transcript_store=transcript_store if record_transcript else None,

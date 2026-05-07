@@ -23,10 +23,13 @@ class PlanStore:
 
     @property
     def path(self) -> Path:
+        # plan 文件按 session 隔离，避免同一 workspace 多个会话互相覆盖计划。
+        # session_id 可能来自用户指定文件名，因此先做 slug 清洗。
         slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", self.session_id).strip("-") or "default"
         return self.plans_dir / f"{slug}.md"
 
     def ensure(self) -> Path:
+        # 进入 plan mode 时先创建空文件，方便用户或模型随后通过工具增量写入。
         self.plans_dir.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
             self.path.write_text("", encoding="utf-8")
@@ -39,6 +42,7 @@ class PlanStore:
             return ""
 
     def write(self, content: str) -> Path:
+        # 统一补一个末尾换行，减少后续追加/展示时出现格式抖动。
         self.plans_dir.mkdir(parents=True, exist_ok=True)
         self.path.write_text(content.rstrip() + "\n", encoding="utf-8")
         return self.path

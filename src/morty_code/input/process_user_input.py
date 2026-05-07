@@ -225,6 +225,8 @@ class UserInputProcessor:
         tool_context = context["tool_context"]
         if not isinstance(tool_context, ToolUseContext):
             return {"mode": "local", "content": "Task context unavailable."}
+        # /tasks 是面向用户的本地查询命令，不走模型。它读取磁盘上的 task
+        # registry，所以即使 CLI 重启，也能查看历史后台子代理状态。
         task_dir = str(tool_context.app_state.get("subagent_tasks_dir") or ".morty/tasks")
         registry = get_subagent_task_registry(task_dir)
         if args.strip():
@@ -252,6 +254,8 @@ class UserInputProcessor:
         messages = context["messages"]
         if not isinstance(tool_context, ToolUseContext) or not isinstance(messages, list):
             return {"mode": "local", "content": "Runtime status unavailable."}
+        # 这里只做轻量估算，不调用 tokenizer。目的是给用户一个“上下文是否在膨胀”
+        # 的运行时观察窗口，而不是精确计费。
         approximate_tokens = sum(len(str(message.payload)) for message in messages)
         return {
             "mode": "local",

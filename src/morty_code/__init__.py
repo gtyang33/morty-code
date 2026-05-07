@@ -199,6 +199,8 @@ def main() -> None:
         help="覆盖项目权限配置里的默认 permission mode",
     )
     args = parser.parse_args()
+    # `--session` 是精确恢复某个 transcript；`-c` 是“恢复最近一次”。
+    # 两者同时出现时无法判断用户真实意图，直接报错比猜测更安全。
     if args.session and args.continue_session:
         parser.error("--session and -c/--continue cannot be used together")
 
@@ -208,11 +210,19 @@ def main() -> None:
         parser.error(str(exc))
     morty_dir = workspace_root / ".morty"
 
+    # 会话文件始终绑定 workspace，而不是绑定 morty-code 源码目录。
+    # 这样从任意目录用 `uv run --project ... --cwd /some/project -c`
+    # 时，恢复的是 `/some/project/.morty/sessions` 下的历史对话。
     restoring_session = bool(args.session or args.continue_session)
     if args.session:
+        # 手动指定 session 时，相对路径按 workspace_root 解析，保持和 @file、
+        # 本地工具、权限配置同一个路径语义。
         transcript_path = _resolve_cli_path(args.session, workspace_root)
         transcript_store = TranscriptStore(transcript_path, transcript_path.stem)
     elif args.continue_session:
+        # Claude Code 风格的 `-c`：不要求用户记住 session id，直接选当前
+        # workspace 最近写入的 transcript。找不到历史时不自动创建新会话，
+        # 避免用户以为已经恢复上下文但实际上是空会话。
         transcript_store = TranscriptStore.latest_in_session_dir(morty_dir / "sessions")
         if transcript_store is None:
             parser.error(

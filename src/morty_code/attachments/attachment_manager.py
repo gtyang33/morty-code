@@ -37,6 +37,8 @@ class AttachmentManager:
         messages: list[Message],
     ) -> list[Attachment]:
         attachments: list[Attachment] = []
+        # input 阶段附件只和真实用户输入绑定：plan mode 提醒、@file 读取、
+        # relevant memory 都在模型采样前一次性 materialize。
         attachments.extend(self._collect_input_mode_context(context))
         for match in AT_MENTION_RE.finditer(input_text):
             attachments.append(self._build_at_mentioned_attachment(match.group(1), context))
@@ -51,6 +53,8 @@ class AttachmentManager:
         )
 
     def _collect_input_mode_context(self, context: ToolUseContext) -> list[Attachment]:
+        # /auto 退出 plan mode 后需要在下一轮显式告知模型“现在可以实现”，
+        # 这个一次性标记由 slash command 写入 app_state，这里消费并清除。
         if context.app_state.pop("needs_plan_mode_exit_attachment", False):
             return [self._build_plan_mode_exit_attachment(context, phase="input")]
         if not context.app_state.get("plan_mode"):
@@ -80,6 +84,8 @@ class AttachmentManager:
         queued_commands: list[QueuedCommand],
     ) -> list[Attachment]:
         attachments: list[Attachment] = []
+        # delta 阶段附件发生在一次工具/模型循环之后，用于补充“本轮执行后”
+        # 才能知道的事实，例如日期变化、hook 注入、后台任务通知。
         attachments.extend(self._collect_date_change(context))
         attachments.extend(self._collect_mode_reminders(context))
         attachments.extend(self._collect_hook_context(context))
@@ -120,6 +126,8 @@ class AttachmentManager:
 
         attachments: list[Attachment] = []
         for file_state in context.read_file_state.values():
+            # compact 会丢掉旧消息，但不能丢掉模型已经依赖过的文件视图；
+            # 因此把 read_file_state 重新作为 meta attachment 注入。
             attachments.append(
                 Attachment(
                     type="at_mentioned_file",

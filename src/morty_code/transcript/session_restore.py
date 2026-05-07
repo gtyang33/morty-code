@@ -18,9 +18,13 @@ class SessionRestore:
         for message in messages:
             if message.type != "attachment":
                 if message.type == "user":
+                    # 恢复大 tool_result 的替换决策。这样继续会话时，同一个
+                    # tool_use_id 不会从“已替换”突然变回完整大文本。
                     self._restore_replacements(message, content_replacement_state)
                 continue
             if message.payload.get("attachment_type") == "at_mentioned_file":
+                # @file/read_file 的可见内容会进入 read_file_state，compact 后可
+                # 重新注入，multi_edit 也能判断编辑前是否读过文件。
                 path = str(message.payload.get("path", ""))
                 if path:
                     read_file_state[path] = FileViewState(
@@ -29,6 +33,8 @@ class SessionRestore:
                         is_partial_view=bool(message.payload.get("truncated", False)),
                     )
             if message.payload.get("attachment_type") == "plan_mode":
+                # plan mode 是状态，不只是历史消息；恢复时必须重新放入 app_state，
+                # 否则重启后可能绕过“先计划后实现”的保护。
                 plan_state["plan_mode"] = True
                 if message.payload.get("plan_file_path"):
                     plan_state["plan_file_path"] = str(message.payload.get("plan_file_path"))
@@ -80,6 +86,8 @@ class SessionRestore:
         events: list[dict[str, object]],
         state: ContentReplacementState,
     ) -> None:
+        # QueryLoop 的 aggregate budget 会把替换记录写成 metadata event。恢复时
+        # 也要读回来，覆盖那些已经不在当前主链消息里的旧 tool_result 决策。
         for event in events:
             if event.get("type") != "content-replacement":
                 continue
