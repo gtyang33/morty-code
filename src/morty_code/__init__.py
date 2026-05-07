@@ -324,25 +324,33 @@ def _mark_running_subagents_interrupted(task_dir: str, process_id: int) -> None:
 def _render_cli_message(message: Message) -> str:
     """把内部消息渲染成面向人的 CLI 文本，完整结构仍保存在 transcript。"""
 
+    verbose = os.environ.get("MORTY_VERBOSE_TOOL_OUTPUT") == "1"
     content = message.payload.get("content")
-    rendered = _render_content(content)
     if message.type == "assistant":
-        return rendered
+        return _render_content(content, verbose=verbose)
     if message.type == "system":
+        rendered = _render_content(content, verbose=verbose)
         subtype = message.payload.get("subtype")
         prefix = f"[system:{subtype}]" if subtype else "[system]"
         return f"{prefix}\n{rendered}".strip()
     if message.type == "user":
-        return f"[user]\n{rendered}".strip()
+        if _is_tool_result_content(content):
+            return _render_tool_results(content, verbose=verbose)
+        if verbose:
+            rendered = _render_content(content, verbose=verbose)
+            return f"[user]\n{rendered}".strip()
+        return ""
     if message.type == "attachment":
         if message.is_meta:
             return ""
+        rendered = _render_content(content, verbose=verbose)
         attachment_type = message.payload.get("attachment_type", "unknown")
         return f"[attachment:{attachment_type}]\n{rendered}".strip()
+    rendered = _render_content(content, verbose=verbose)
     return f"[{message.type}]\n{rendered}".strip()
 
 
-def _render_content(content: object) -> str:
+def _render_content(content: object, *, verbose: bool = False) -> str:
     if isinstance(content, str):
         return content
     if not isinstance(content, list):
@@ -353,19 +361,132 @@ def _render_content(content: object) -> str:
             parts.append(str(block.get("text", "")))
             continue
         if isinstance(block, dict) and block.get("type") == "tool_use":
-            parts.append(
-                f"[tool_use:{block.get('name', 'unknown')} id={block.get('id', '')}]"
-            )
+            if verbose:
+                parts.append(_json_fallback(block))
+            else:
+                parts.append(_render_tool_use(block))
             continue
         if isinstance(block, dict) and block.get("type") == "tool_result":
-            status = "error" if block.get("is_error") else "ok"
-            parts.append(
-                f"[tool_result:{status} id={block.get('tool_use_id', '')}]\n"
-                f"{_render_content(block.get('content'))}"
-            )
+            parts.append(_render_single_tool_result(block, verbose=verbose))
             continue
         parts.append(_json_fallback(block))
     return "\n".join(part for part in parts if part).strip()
+
+
+def _is_tool_result_content(content: object) -> bool:
+    if not isinstance(content, list) or not content:
+        return False
+    return all(isinstance(block, dict) and block.get("type") == "tool_result"
+        for block in content)
+
+
+def _render_tool_use(block: dict[str, object]) -> str:
+    name = str(block.get("name") or "unknown")
+    tool_input = block.get("input")
+    summary = _summarize_tool_input(name, tool_input)
+    return f"[tool] {name}{(': ' + summary) if summary else ''}"
+
+
+def _summarize_tool_input(name: str, tool_input: object) -> str:
+    if not isinstance(tool_input, dict):
+        return ""
+    if name in {"read_file", "list_dir", "file_info"}:
+        return str(tool_input.get("path") or ".")
+    if name == "grep_text":
+        pattern = str(tool_input.get("pattern") or tool_input.get("query") or "")
+        path = str(tool_input.get("path") or ".")
+        return _truncate_text(f"{pattern} in {path}", 120)
+    if name == "glob_files":
+        pattern = str(tool_input.get("pattern") or "")
+        path = str(tool_input.get("path") or ".")
+        return _truncate_text(f"{pattern} in {path}", 120)
+    if name == "bash":
+        return _truncate_text(str(tool_input.get("command") or ""), 160)
+    items = []
+    for key, value in list(tool_input.items())[:3]:
+        items.append(f"{key}={_truncate_text(str(value), 40)}")
+    return ", ".join(items)
+
+
+def _render_tool_results(content: object, *, verbose: bool) -> str:
+    if not isinstance(content, list):
+        return ""
+    return "\n".join(
+        rendered for rendered in (
+            _render_single_tool_result(block, verbose=verbose)
+            for block in content
+            if isinstance(block, dict)
+        )
+        if rendered
+    )
+
+
+def _render_single_tool_result(block: dict[str, object], *, verbose: bool) -> str:
+    status = "error" if block.get("is_error") else "ok"
+    if verbose:
+        return (
+            f"[tool_result:{status} id={block.get('tool_use_id', '')}]\n"
+            f"{_render_content(block.get('content'), verbose=verbose)}"
+        ).strip()
+    return f"[tool:{status}] {_summarize_tool_result(block.get('content'))}".strip()
+
+
+def _summarize_tool_result(content: object) -> str:
+    parsed = _parse_tool_result_payload(content)
+    if isinstance(parsed, dict):
+        if "entries" in parsed and "path" in parsed:
+            entries = parsed.get("entries")
+            count = len(entries) if isinstance(entries, list) else "unknown"
+            truncated = " (truncated)" if parsed.get("truncated") else ""
+            return f"list_dir {parsed.get('path')}: {count} entries{truncated}"
+        if "filenames" in parsed:
+            filenames = parsed.get("filenames")
+            if isinstance(filenames, list):
+                preview = ", ".join(str(item) for item in filenames[:5])
+                suffix = "" if len(filenames) <= 5 else f", ... +{len(filenames) - 5}"
+                return f"grep matched {len(filenames)} files: {preview}{suffix}"
+            return "grep matched files"
+        if "path" in parsed and "line_count" in parsed:
+            truncated = " (truncated)" if parsed.get("truncated") else ""
+            return f"read_file {parsed.get('path')}: {parsed.get('line_count')} lines{truncated}"
+        if "path" in parsed:
+            return f"{parsed.get('path')}"
+        if "output" in parsed:
+            return _truncate_text(str(parsed.get("output")), 240)
+        if "status" in parsed:
+            return str(parsed.get("status"))
+        return _truncate_text(_json_fallback(parsed), 240)
+    if isinstance(parsed, str):
+        if parsed.startswith("[Tool result ") and "was replaced" in parsed:
+            return "large result hidden; full content is kept in transcript/tool-results"
+        return _truncate_text(parsed, 240)
+    return _truncate_text(_json_fallback(parsed), 240)
+
+
+def _parse_tool_result_payload(content: object) -> object:
+    if isinstance(content, list):
+        text_parts = [
+            str(block.get("text", ""))
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        content = "\n".join(part for part in text_parts if part)
+    if isinstance(content, str):
+        stripped = content.strip()
+        if stripped.startswith("{") or stripped.startswith("["):
+            try:
+                return json.loads(stripped)
+            except json.JSONDecodeError:
+                return content
+        return content
+    return content
+
+
+def _truncate_text(text: str, limit: int) -> str:
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[: max(0, limit - 3)] + "..."
 
 
 def _json_fallback(value: object) -> str:

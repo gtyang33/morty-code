@@ -7,7 +7,14 @@ import time
 
 from prompt_toolkit.document import Document
 
-from morty_code import _MORTY_STYLE, _ReplLexer, _Spinner, _SPINNER_FRAMES
+from morty_code import (
+    _MORTY_STYLE,
+    _ReplLexer,
+    _Spinner,
+    _SPINNER_FRAMES,
+    _render_cli_message,
+)
+from morty_code.types.messages import Message
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +120,84 @@ class TestMortyStyle:
         style_classes = {name for name, _style in _MORTY_STYLE.style_rules}
         for cls in ("slash", "command", "argument"):
             assert cls in style_classes
+
+
+# ---------------------------------------------------------------------------
+# CLI message rendering
+# ---------------------------------------------------------------------------
+
+
+class TestCliMessageRendering:
+    """默认 CLI 输出应面向用户，而不是暴露内部 transcript 结构。"""
+
+    def _message(self, role: str, content: object) -> Message:
+        return Message(
+            uuid="u1",
+            timestamp="2026-05-07T00:00:00",
+            type=role,  # type: ignore[arg-type]
+            payload={"content": content},
+        )
+
+    def test_assistant_tool_use_is_compact(self):
+        message = self._message(
+            "assistant",
+            [
+                {"type": "text", "text": "我先搜索相关代码。"},
+                {
+                    "type": "tool_use",
+                    "name": "grep_text",
+                    "id": "tool-1",
+                    "input": {"pattern": "MvRecommendation", "path": "core"},
+                },
+            ],
+        )
+
+        rendered = _render_cli_message(message)
+
+        assert "我先搜索相关代码。" in rendered
+        assert "[tool] grep_text: MvRecommendation in core" in rendered
+        assert '"input"' not in rendered
+
+    def test_user_tool_result_is_summarized(self):
+        message = self._message(
+            "user",
+            [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "tool-1",
+                    "content": {
+                        "path": "/tmp/project",
+                        "entries": [{"name": "core", "kind": "directory"}],
+                        "truncated": False,
+                    },
+                }
+            ],
+        )
+
+        rendered = _render_cli_message(message)
+
+        assert rendered == "[tool:ok] list_dir /tmp/project: 1 entries"
+
+    def test_large_tool_result_replacement_is_hidden(self):
+        message = self._message(
+            "user",
+            [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "tool-1",
+                    "content": "[Tool result tool-1 was 20000 chars and was replaced to keep prompt size stable.]",
+                }
+            ],
+        )
+
+        rendered = _render_cli_message(message)
+
+        assert rendered == "[tool:ok] large result hidden; full content is kept in transcript/tool-results"
+
+    def test_plain_user_message_is_not_echoed_by_default(self):
+        message = self._message("user", "hello")
+
+        assert _render_cli_message(message) == ""
 
 
 # ---------------------------------------------------------------------------
