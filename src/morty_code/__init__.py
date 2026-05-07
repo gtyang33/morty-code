@@ -180,6 +180,11 @@ def main() -> None:
     parser.add_argument("--provider", choices=["echo", "openai-compatible"], default="echo")
     parser.add_argument("--model", default="echo-model")
     parser.add_argument("--base-url", help="OpenAI-compatible base URL，默认读取 OPENAI_BASE_URL")
+    parser.add_argument(
+        "--api-timeout",
+        type=float,
+        help="OpenAI-compatible 单次请求超时时间秒数，默认读取 MORTY_API_TIMEOUT/OPENAI_TIMEOUT/LLM_TIMEOUT 或 120",
+    )
     parser.add_argument("--enable-local-tools", action="store_true", help="启用 cwd 内本地文件和命令工具")
     parser.add_argument(
         "--permission-mode",
@@ -200,7 +205,11 @@ def main() -> None:
     else:
         transcript_store = TranscriptStore.for_session_dir(morty_dir / "sessions")
     model_client = (
-        OpenAICompatibleModelClient(model=args.model, base_url=args.base_url)
+        OpenAICompatibleModelClient(
+            model=args.model,
+            base_url=args.base_url,
+            timeout=args.api_timeout,
+        )
         if args.provider == "openai-compatible"
         else EchoModelClient()
     )

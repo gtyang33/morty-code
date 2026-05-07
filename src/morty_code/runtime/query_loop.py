@@ -367,7 +367,7 @@ class QueryLoop:
             prefix += f" HTTP {status}"
         return Message(
             uuid=str(uuid4()),
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             type="assistant",
             payload={
                 "content": [{"type": "text", "text": f"{prefix}: {_shorten(content, 4000)}"}],

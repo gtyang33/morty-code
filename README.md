@@ -29,6 +29,16 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --project /home/transwarp/morty/claude-code-2.
 
 项目使用 `pyproject.toml` + `uv.lock` 管理环境，不需要 `pip install -r requirements.txt`。
 `openai-compatible` provider 使用标准库 HTTP 客户端，读取 `OPENAI_API_KEY` 和可选的 `OPENAI_BASE_URL`。
+单次模型请求默认 120 秒超时；如果分析任务读了很多文件、上下文很大，看到 `Model provider error: request timed out after 120s`，可以提高超时：
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache uv run morty-code \
+  --provider openai-compatible \
+  --model deepseek-chat \
+  --api-timeout 300
+```
+
+也可以通过环境变量设置：`MORTY_API_TIMEOUT=300`，兼容读取 `OPENAI_TIMEOUT` 和 `LLM_TIMEOUT`。
 
 当前已实现：
 

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Protocol
 from uuid import uuid4
 
@@ -41,7 +42,7 @@ class EchoModelClient:
             content = f"Echo: {last_user['content']}"
         return Message(
             uuid=str(uuid4()),
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             type="assistant",
             payload={
                 "content": [
@@ -67,12 +68,17 @@ class OpenAICompatibleModelClient:
         model: str,
         base_url: str | None = None,
         api_key: str | None = None,
-        timeout: float = 120.0,
+        timeout: float | None = None,
     ) -> None:
         self.model = model
         self.base_url = (base_url or os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
-        self.timeout = timeout
+        self.timeout = timeout if timeout is not None else _env_float(
+            "MORTY_API_TIMEOUT",
+            "OPENAI_TIMEOUT",
+            "LLM_TIMEOUT",
+            default=120.0,
+        )
         # 普通 OpenAI Chat 网关可能拒绝 cache_control；默认只在 runtime 内部规划。
         self.send_cache_control = os.environ.get("MORTY_SEND_CACHE_CONTROL") == "1"
 
@@ -121,10 +127,18 @@ class OpenAICompatibleModelClient:
                 detail=detail,
                 retry_after=retry_after,
             ) from exc
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        except (socket.timeout, TimeoutError) as exc:
             raise ModelProviderError(
-                f"model provider connection failed: {exc}",
-                detail=str(exc),
+                f"model provider request timed out after {self.timeout:g}s",
+                detail=f"request timed out after {self.timeout:g}s",
+            ) from exc
+        except (urllib.error.URLError, OSError) as exc:
+            detail = str(exc) or exc.__class__.__name__
+            if "timed out" in detail.lower():
+                detail = f"request timed out after {self.timeout:g}s"
+            raise ModelProviderError(
+                f"model provider connection failed: {detail}",
+                detail=detail,
             ) from exc
         choice = payload.get("choices", [{}])[0].get("message", {})
         message = self._message_from_choice(choice)
@@ -178,7 +192,7 @@ class OpenAICompatibleModelClient:
             blocks.append({"type": "text", "text": ""})
         return Message(
             uuid=str(uuid4()),
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             type="assistant",
             payload={"content": blocks},
         )
@@ -325,3 +339,17 @@ def _parse_retry_after(value: str | None) -> float | None:
         return max(0.0, float(value))
     except ValueError:
         return None
+
+
+def _env_float(*names: str, default: float) -> float:
+    for name in names:
+        raw = os.environ.get(name)
+        if raw is None or not raw.strip():
+            continue
+        try:
+            value = float(raw)
+        except ValueError:
+            continue
+        if value > 0:
+            return value
+    return default
