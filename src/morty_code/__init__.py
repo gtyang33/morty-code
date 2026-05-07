@@ -175,6 +175,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="morty-code")
     parser.add_argument("--cwd", help="目标工作区目录，默认使用当前 shell 所在目录")
     parser.add_argument("--session", help="恢复指定 JSONL transcript 文件")
+    parser.add_argument(
+        "-c",
+        "--continue",
+        dest="continue_session",
+        action="store_true",
+        help="恢复当前 workspace 最近一次 .morty/sessions 会话",
+    )
     parser.add_argument("--once", help="只提交一条输入后退出")
     parser.add_argument("--input-format", choices=["text", "stream-json"], default="text")
     parser.add_argument("--provider", choices=["echo", "openai-compatible"], default="echo")
@@ -192,6 +199,8 @@ def main() -> None:
         help="覆盖项目权限配置里的默认 permission mode",
     )
     args = parser.parse_args()
+    if args.session and args.continue_session:
+        parser.error("--session and -c/--continue cannot be used together")
 
     try:
         workspace_root = _resolve_workspace_root(args.cwd)
@@ -199,9 +208,17 @@ def main() -> None:
         parser.error(str(exc))
     morty_dir = workspace_root / ".morty"
 
+    restoring_session = bool(args.session or args.continue_session)
     if args.session:
         transcript_path = _resolve_cli_path(args.session, workspace_root)
         transcript_store = TranscriptStore(transcript_path, transcript_path.stem)
+    elif args.continue_session:
+        transcript_store = TranscriptStore.latest_in_session_dir(morty_dir / "sessions")
+        if transcript_store is None:
+            parser.error(
+                f"no previous session found in {morty_dir / 'sessions'}; "
+                "start a new session without -c"
+            )
     else:
         transcript_store = TranscriptStore.for_session_dir(morty_dir / "sessions")
     model_client = (
@@ -258,7 +275,7 @@ def main() -> None:
     get_subagent_task_registry(
         str(tool_context.app_state["subagent_tasks_dir"])
     ).interrupt_orphaned_running()
-    if args.session:
+    if restoring_session:
         restored = asyncio.run(
             engine.restore_from_transcript(
                 {
@@ -274,7 +291,7 @@ def main() -> None:
         tool_context.session_memory_path = str(morty_dir / "session_memory.md")
         tool_context.durable_memory_dir = str(morty_dir / "memory")
         tool_context.app_state.update(app_state)
-        print(f"restored {len(restored['messages'])} messages from {args.session}")
+        print(f"restored {len(restored['messages'])} messages from {transcript_store.path}")
 
     if args.once is not None:
         live_print, printed_ids = _make_live_printer()

@@ -8,6 +8,7 @@
 uv run morty-code
 uv run morty-code --once "读取 @README.md 并总结"
 uv run morty-code --session .morty/sessions/<session-id>.jsonl
+uv run morty-code -c
 uv run morty-code --provider openai-compatible --model gpt-4.1-mini --once "hello"
 uv run morty-code --enable-local-tools
 ```
@@ -26,6 +27,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --project /home/transwarp/morty/claude-code-2.
 ```
 
 `--cwd` 是目标工作区目录；`.morty/sessions`、`.morty/plans`、`.morty/tasks`、权限配置、本地工具边界和 `@file` 解析都会跟随这个目录，而不是跟随 morty-code 源码目录。
+`-c` / `--continue` 会自动恢复当前 workspace 下 `.morty/sessions` 中最近一次会话；如果要恢复指定会话，继续使用 `--session .morty/sessions/<session-id>.jsonl`。
 
 项目使用 `pyproject.toml` + `uv.lock` 管理环境，不需要 `pip install -r requirements.txt`。
 `openai-compatible` provider 使用标准库 HTTP 客户端，读取 `OPENAI_API_KEY` 和可选的 `OPENAI_BASE_URL`。

@@ -26,6 +26,22 @@ class TranscriptStore:
         session_id = str(uuid4())
         return cls(session_root / f"{session_id}.jsonl", session_id)
 
+    @classmethod
+    def latest_in_session_dir(cls, session_dir: str | Path) -> "TranscriptStore | None":
+        """恢复最近一次主会话 transcript，用于 CLI `-c/--continue`。"""
+
+        session_root = Path(session_dir)
+        if not session_root.exists():
+            return None
+        candidates = [
+            path for path in session_root.glob("*.jsonl")
+            if path.is_file() and path.stat().st_size > 0
+        ]
+        if not candidates:
+            return None
+        latest = max(candidates, key=lambda path: (path.stat().st_mtime_ns, path.name))
+        return cls(latest, latest.stem)
+
     async def append_messages(
         self,
         messages: list[Message],
