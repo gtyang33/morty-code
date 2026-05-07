@@ -56,6 +56,59 @@ def _env_list(name: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def _resolve_workspace_root(raw_cwd: str | None) -> Path:
+    """解析 morty-code 的目标工作区，CLI 进程目录和项目目录可以分离。"""
+
+    root = Path(raw_cwd).expanduser() if raw_cwd else Path.cwd()
+    root = root.resolve()
+    if not root.exists():
+        raise FileNotFoundError(f"workspace cwd does not exist: {root}")
+    if not root.is_dir():
+        raise NotADirectoryError(f"workspace cwd is not a directory: {root}")
+    return root
+
+
+def _resolve_cli_path(raw_path: str, workspace_root: Path) -> Path:
+    """CLI 传入的相对路径按 workspace root 解析，避免受启动目录影响。"""
+
+    path = Path(raw_path).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+    return (workspace_root / path).resolve()
+
+
+def _runtime_app_state(
+    *,
+    workspace_root: Path,
+    transcript_store: TranscriptStore,
+    permission_mode: str,
+    permission_settings,
+    tool_registry,
+) -> dict[str, object]:
+    morty_dir = workspace_root / ".morty"
+    return {
+        "cwd": str(workspace_root),
+        "morty_dir": str(morty_dir),
+        "permission_mode": permission_mode,
+        "session_id": transcript_store.session_id,
+        "transcript_path": str(transcript_store.path),
+        "plans_dir": str(morty_dir / "plans"),
+        "subagent_transcripts_dir": str(morty_dir / "subagents"),
+        "subagent_tasks_dir": str(morty_dir / "tasks"),
+        "agents_dir": str(morty_dir / "agents"),
+        "tool_results_dir": str(morty_dir / "tool-results"),
+        "allow_dangerous_bash": os.environ.get("MORTY_ALLOW_DANGEROUS_BASH") == "1",
+        "always_allowed_tools": permission_settings.allow,
+        "denied_tools": permission_settings.deny,
+        "always_ask_tools": permission_settings.ask,
+        "permission_settings_sources": permission_settings.sources,
+        "tool_schemas": tool_registry.api_tool_schemas() if tool_registry is not None else [],
+        "enable_prompt_caching": os.environ.get("DISABLE_PROMPT_CACHING") != "1",
+        "send_cache_control": os.environ.get("MORTY_SEND_CACHE_CONTROL") == "1",
+        "prompt_cache_ttl": os.environ.get("MORTY_PROMPT_CACHE_TTL"),
+    }
+
+
 class _ReplLexer(Lexer):
     """简单 lexer：/command 高亮，其余为普通文本。"""
 
@@ -119,6 +172,7 @@ def main() -> None:
     """最小 CLI 入口，用于手动验证 runtime 主链路是否能跑通。"""
 
     parser = argparse.ArgumentParser(prog="morty-code")
+    parser.add_argument("--cwd", help="目标工作区目录，默认使用当前 shell 所在目录")
     parser.add_argument("--session", help="恢复指定 JSONL transcript 文件")
     parser.add_argument("--once", help="只提交一条输入后退出")
     parser.add_argument("--input-format", choices=["text", "stream-json"], default="text")
@@ -133,19 +187,25 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    try:
+        workspace_root = _resolve_workspace_root(args.cwd)
+    except (FileNotFoundError, NotADirectoryError) as exc:
+        parser.error(str(exc))
+    morty_dir = workspace_root / ".morty"
+
     if args.session:
-        transcript_path = Path(args.session)
+        transcript_path = _resolve_cli_path(args.session, workspace_root)
         transcript_store = TranscriptStore(transcript_path, transcript_path.stem)
     else:
-        transcript_store = TranscriptStore.for_session_dir(".morty/sessions")
+        transcript_store = TranscriptStore.for_session_dir(morty_dir / "sessions")
     model_client = (
         OpenAICompatibleModelClient(model=args.model, base_url=args.base_url)
         if args.provider == "openai-compatible"
         else EchoModelClient()
     )
-    tool_registry = create_local_tool_registry(".") if args.enable_local_tools else None
+    tool_registry = create_local_tool_registry(workspace_root) if args.enable_local_tools else None
     permission_settings = load_permission_settings(
-        ".",
+        workspace_root,
         env_allow=_env_list("MORTY_ALLOW_TOOLS"),
         env_deny=_env_list("MORTY_DENY_TOOLS"),
         env_ask=_env_list("MORTY_ASK_TOOLS"),
@@ -163,32 +223,22 @@ def main() -> None:
         compact_agent=CompactAgent(),
         memory_extractor=MemoryExtractor(),
     )
+    app_state = _runtime_app_state(
+        workspace_root=workspace_root,
+        transcript_store=transcript_store,
+        permission_mode=permission_mode,
+        permission_settings=permission_settings,
+        tool_registry=tool_registry,
+    )
     tool_context = ToolUseContext(
         tools=tool_registry.list_names() if tool_registry is not None else [],
         model=args.model,
         permission_mode=permission_mode,
-        app_state={
-            "cwd": ".",
-            "permission_mode": permission_mode,
-            "session_id": transcript_store.session_id,
-            "transcript_path": str(transcript_store.path),
-            "plans_dir": ".morty/plans",
-            "subagent_transcripts_dir": ".morty/subagents",
-            "subagent_tasks_dir": ".morty/tasks",
-            "allow_dangerous_bash": os.environ.get("MORTY_ALLOW_DANGEROUS_BASH") == "1",
-            "always_allowed_tools": permission_settings.allow,
-            "denied_tools": permission_settings.deny,
-            "always_ask_tools": permission_settings.ask,
-            "permission_settings_sources": permission_settings.sources,
-            "tool_schemas": tool_registry.api_tool_schemas() if tool_registry is not None else [],
-            "enable_prompt_caching": os.environ.get("DISABLE_PROMPT_CACHING") != "1",
-            "send_cache_control": os.environ.get("MORTY_SEND_CACHE_CONTROL") == "1",
-            "prompt_cache_ttl": os.environ.get("MORTY_PROMPT_CACHE_TTL"),
-        },
+        app_state=app_state,
         read_file_state={},
         content_replacement_state=ContentReplacementState(),
-        session_memory_path=".morty/session_memory.md",
-        durable_memory_dir=".morty/memory",
+        session_memory_path=str(morty_dir / "session_memory.md"),
+        durable_memory_dir=str(morty_dir / "memory"),
     )
     atexit.register(
         _mark_running_subagents_interrupted,
@@ -202,19 +252,8 @@ def main() -> None:
         restored = asyncio.run(
             engine.restore_from_transcript(
                 {
-                    "cwd": ".",
+                    **app_state,
                     "model": args.model,
-                    "permission_mode": permission_mode,
-                    "session_id": transcript_store.session_id,
-                    "transcript_path": str(transcript_store.path),
-                    "plans_dir": ".morty/plans",
-                    "subagent_transcripts_dir": ".morty/subagents",
-                    "subagent_tasks_dir": ".morty/tasks",
-                    "allow_dangerous_bash": os.environ.get("MORTY_ALLOW_DANGEROUS_BASH") == "1",
-                    "always_allowed_tools": permission_settings.allow,
-                    "denied_tools": permission_settings.deny,
-                    "always_ask_tools": permission_settings.ask,
-                    "permission_settings_sources": permission_settings.sources,
                 }
             )
         )
@@ -222,19 +261,9 @@ def main() -> None:
         tool_context.tools = tool_registry.list_names() if tool_registry is not None else []
         tool_context.model = args.model
         tool_context.permission_mode = permission_mode
-        tool_context.app_state.update(
-            {
-                "permission_mode": permission_mode,
-                "subagent_transcripts_dir": ".morty/subagents",
-                "subagent_tasks_dir": ".morty/tasks",
-                "allow_dangerous_bash": os.environ.get("MORTY_ALLOW_DANGEROUS_BASH") == "1",
-                "always_allowed_tools": permission_settings.allow,
-                "denied_tools": permission_settings.deny,
-                "always_ask_tools": permission_settings.ask,
-                "permission_settings_sources": permission_settings.sources,
-                "tool_schemas": tool_registry.api_tool_schemas() if tool_registry is not None else [],
-            }
-        )
+        tool_context.session_memory_path = str(morty_dir / "session_memory.md")
+        tool_context.durable_memory_dir = str(morty_dir / "memory")
+        tool_context.app_state.update(app_state)
         print(f"restored {len(restored['messages'])} messages from {args.session}")
 
     if args.once is not None:
@@ -246,7 +275,7 @@ def main() -> None:
         run_stream_json_harness(engine, tool_context)
         return
 
-    history_file = Path(".morty/repl_history")
+    history_file = morty_dir / "repl_history"
     history_file.parent.mkdir(parents=True, exist_ok=True)
 
     session: PromptSession[str] = PromptSession(

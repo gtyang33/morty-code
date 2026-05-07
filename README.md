@@ -12,6 +12,21 @@ uv run morty-code --provider openai-compatible --model gpt-4.1-mini --once "hell
 uv run morty-code --enable-local-tools
 ```
 
+在源码目录外运行时有两种方式：
+
+```bash
+# 不安装，直接指定 morty-code 项目目录；当前目录就是被操作的 workspace
+cd /path/to/your/project
+UV_CACHE_DIR=/tmp/uv-cache uv run --project /home/transwarp/morty/claude-code-2.1.88/morty-code \
+  morty-code --provider openai-compatible --model deepseek-chat --enable-local-tools
+
+# 或者显式指定 workspace
+UV_CACHE_DIR=/tmp/uv-cache uv run --project /home/transwarp/morty/claude-code-2.1.88/morty-code \
+  morty-code --cwd /path/to/your/project --provider openai-compatible --model deepseek-chat --enable-local-tools
+```
+
+`--cwd` 是目标工作区目录；`.morty/sessions`、`.morty/plans`、`.morty/tasks`、权限配置、本地工具边界和 `@file` 解析都会跟随这个目录，而不是跟随 morty-code 源码目录。
+
 项目使用 `pyproject.toml` + `uv.lock` 管理环境，不需要 `pip install -r requirements.txt`。
 `openai-compatible` provider 使用标准库 HTTP 客户端，读取 `OPENAI_API_KEY` 和可选的 `OPENAI_BASE_URL`。
 

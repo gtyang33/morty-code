@@ -20,11 +20,15 @@ def register_subagent_tool(query_loop, registry: ToolRegistry) -> None:
 
     if registry.find("spawn_agent") is not None:
         return
-    runner = SubagentRunner(
-        query_loop=query_loop,
-        tool_registry=registry,
-        agent_registry=load_project_agents(),
-    )
+
+    def make_runner(context: ToolUseContext) -> SubagentRunner:
+        # 项目自定义 agent 必须跟随父 agent 的 workspace，而不是 morty-code 源码目录。
+        agent_dir = str(context.app_state.get("agents_dir") or ".morty/agents")
+        return SubagentRunner(
+            query_loop=query_loop,
+            tool_registry=registry,
+            agent_registry=load_project_agents(agent_dir),
+        )
 
     async def spawn_agent(
         args: dict[str, object],
@@ -37,6 +41,7 @@ def register_subagent_tool(query_loop, registry: ToolRegistry) -> None:
         agent_type = str(args.get("subagent_type") or "general-purpose")
         run_in_background = bool(args.get("run_in_background") is True)
         description = str(args.get("description") or agent_type)
+        runner = make_runner(context)
         if run_in_background:
             return _launch_background_agent(
                 runner=runner,
