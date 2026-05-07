@@ -9,6 +9,7 @@ import os
 import sys
 import threading
 from pathlib import Path
+from typing import Callable
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import FormattedText
@@ -267,7 +268,14 @@ def main() -> None:
         print(f"restored {len(restored['messages'])} messages from {args.session}")
 
     if args.once is not None:
-        for message in engine.submit_message_sync(args.once, tool_context):
+        live_print, printed_ids = _make_live_printer()
+        for message in engine.submit_message_sync(
+            args.once,
+            tool_context,
+            on_new_messages=live_print,
+        ):
+            if message.uuid in printed_ids:
+                continue
             _print_cli_message(message)
         return
 
@@ -299,11 +307,35 @@ def main() -> None:
             continue
         spinner.start("thinking")
         try:
-            messages = engine.submit_message_sync(raw, tool_context)
+            live_print, printed_ids = _make_live_printer(spinner=spinner)
+            messages = engine.submit_message_sync(
+                raw,
+                tool_context,
+                on_new_messages=live_print,
+            )
         finally:
             spinner.stop()
         for message in messages:
+            if message.uuid in printed_ids:
+                continue
             _print_cli_message(message)
+
+
+def _make_live_printer(
+    spinner: _Spinner | None = None,
+) -> tuple[Callable[[list[Message]], None], set[str]]:
+    printed_ids: set[str] = set()
+
+    def _print(messages: list[Message]) -> None:
+        if spinner is not None:
+            spinner.stop()
+        for message in messages:
+            printed_ids.add(message.uuid)
+            _print_cli_message(message)
+        if spinner is not None:
+            spinner.start("thinking")
+
+    return _print, printed_ids
 
 
 def _print_cli_message(message: Message) -> None:

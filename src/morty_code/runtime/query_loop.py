@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
+from typing import Callable
 from uuid import uuid4
 
 from morty_code.api.errors import ModelProviderError
@@ -61,12 +62,14 @@ class QueryLoop:
         cache_safe: CacheSafeParams,
         tool_context: ToolUseContext,
         max_iterations: int | None = None,
+        on_new_messages: Callable[[list[Message]], None] | None = None,
     ) -> QueryLoopResult:
         new_messages: list[Message] = []
         metadata_events: list[dict[str, object]] = []
         working_messages = list(messages)
         assistant_message: Message | None = None
         iteration_limit = self.max_iterations if max_iterations is None else max(1, max_iterations)
+        hit_iteration_limit_with_tools = False
         for _ in range(iteration_limit):
             working_messages, replacement_records = apply_tool_result_budget(
                 working_messages,
@@ -131,6 +134,7 @@ class QueryLoop:
             )
             if assistant_message.payload.get("is_api_error"):
                 new_messages.append(assistant_message)
+                self._emit_new_messages(on_new_messages, [assistant_message])
                 break
             usage = extract_cache_usage(assistant_message.payload)
             if usage["cache_read_input_tokens"] or usage["cache_creation_input_tokens"]:
@@ -146,6 +150,7 @@ class QueryLoop:
                 )
             new_messages.append(assistant_message)
             working_messages.append(assistant_message)
+            self._emit_new_messages(on_new_messages, [assistant_message])
 
             tool_messages = await self.tool_runner.run(assistant_message, tool_context, cache_safe)
             tool_events = tool_context.app_state.pop("tool_execution_events", [])
@@ -155,8 +160,25 @@ class QueryLoop:
                 break
             new_messages.extend(tool_messages)
             working_messages.extend(tool_messages)
+            self._emit_new_messages(on_new_messages, tool_messages)
+        else:
+            hit_iteration_limit_with_tools = bool(
+                assistant_message is not None
+                and self._message_has_tool_uses(assistant_message)
+            )
         if assistant_message is None:
             return QueryLoopResult(new_messages=[], metadata_events=metadata_events)
+        if hit_iteration_limit_with_tools:
+            final_messages = await self._finalize_after_iteration_limit(
+                working_messages=working_messages,
+                cache_safe=cache_safe,
+                tool_context=tool_context,
+                metadata_events=metadata_events,
+                iteration_limit=iteration_limit,
+            )
+            new_messages.extend(final_messages)
+            working_messages.extend(final_messages)
+            self._emit_new_messages(on_new_messages, final_messages)
         post_attachments = await self.attachment_manager.collect_post_iteration(
             input_text="",
             context=tool_context,
@@ -170,10 +192,80 @@ class QueryLoop:
             )
             for attachment in post_attachments
         ]
+        self._emit_new_messages(on_new_messages, attachment_messages)
         return QueryLoopResult(
             new_messages=[*new_messages, *attachment_messages],
             metadata_events=metadata_events,
         )
+
+    async def _finalize_after_iteration_limit(
+        self,
+        *,
+        working_messages: list[Message],
+        cache_safe: CacheSafeParams,
+        tool_context: ToolUseContext,
+        metadata_events: list[dict[str, object]],
+        iteration_limit: int,
+    ) -> list[Message]:
+        """工具迭代耗尽后追加一次无工具总结，避免 CLI 停在 tool_result。"""
+
+        metadata_events.append(
+            {
+                "type": "tool-iteration-limit-finalize",
+                "max_iterations": iteration_limit,
+            }
+        )
+        final_instruction = Message(
+            uuid=str(uuid4()),
+            timestamp=datetime.now(UTC).isoformat(),
+            type="user",
+            payload={
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "工具调用轮次已达到上限。请只基于已经获得的工具结果给出"
+                            "最终结论、关键依据和下一步建议，不要再调用工具。"
+                        ),
+                    }
+                ]
+            },
+            is_meta=True,
+        )
+        final_api_messages = self.normalizer.normalize_for_api(
+            [*working_messages, final_instruction],
+            [],
+        )
+        final_system_context = dict(cache_safe.system_context)
+        final_system_context.pop("tool_schemas_json", None)
+        assistant_message = await self._respond_with_retries(
+            messages=final_api_messages,
+            fallback_messages=final_api_messages,
+            system_prompt=cache_safe.system_prompt,
+            user_context=cache_safe.user_context,
+            system_context=final_system_context,
+            fallback_system_context=final_system_context,
+            metadata_events=metadata_events,
+        )
+        return [final_instruction, assistant_message]
+
+    @staticmethod
+    def _message_has_tool_uses(message: Message) -> bool:
+        content = message.payload.get("content")
+        if not isinstance(content, list):
+            return False
+        return any(
+            isinstance(block, dict) and block.get("type") == "tool_use"
+            for block in content
+        )
+
+    @staticmethod
+    def _emit_new_messages(
+        callback: Callable[[list[Message]], None] | None,
+        messages: list[Message],
+    ) -> None:
+        if callback is not None and messages:
+            callback(messages)
 
     async def _respond_with_retries(
         self,

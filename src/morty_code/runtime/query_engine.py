@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from typing import Callable
 from uuid import uuid4
 
 from morty_code.compact.auto_compact import AutoCompactDecider
@@ -54,6 +55,7 @@ class QueryEngine:
         raw_input: str,
         tool_context: ToolUseContext,
         pasted_contents: dict[int, dict[str, object]] | None = None,
+        on_new_messages: Callable[[list[Message]], None] | None = None,
     ) -> list[Message]:
         queued_commands = await self.input_dispatcher.submit(
             raw_input=raw_input,
@@ -147,6 +149,7 @@ class QueryEngine:
                     messages=list(messages_for_query),
                 ),
                 tool_context=tool_context,
+                on_new_messages=on_new_messages,
             )
         except Exception as exc:  # noqa: BLE001 - 顶层兜底，保证 transcript 不因异常断链。
             error_message = self._assistant_error_message(str(exc))
@@ -182,8 +185,16 @@ class QueryEngine:
         raw_input: str,
         tool_context: ToolUseContext,
         pasted_contents: dict[int, dict[str, object]] | None = None,
+        on_new_messages: Callable[[list[Message]], None] | None = None,
     ) -> list[Message]:
-        return asyncio.run(self.submit_message(raw_input, tool_context, pasted_contents))
+        return asyncio.run(
+            self.submit_message(
+                raw_input,
+                tool_context,
+                pasted_contents,
+                on_new_messages=on_new_messages,
+            )
+        )
 
     async def restore_from_transcript(self, metadata: dict[str, object] | None = None) -> dict[str, object]:
         loaded = await self.transcript_store.load_session()
