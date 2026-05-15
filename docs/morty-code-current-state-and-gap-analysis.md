@@ -100,6 +100,7 @@
 - project permission settings
 - permission modes
 - Bash scoped rules
+- Linux/bwrap OS sandbox for Bash
 - harness permission handoff
 
 ### Harness
@@ -197,9 +198,9 @@ flowchart TD
 
 ### 还缺的关键能力
 
-1. 真正的 OS sandbox
-- 现在主要靠 permission policy 和 Bash 安全检查。
-- 还缺文件系统 / 网络隔离 / sandbox override 的完整执行层。
+1. 更完整的 OS sandbox
+- 已有 Linux/bwrap Bash sandbox：workspace 和 `/tmp` 可写，系统路径只读。
+- 还缺非 Linux 后端、严格网络隔离失败关闭模式、sandbox override 的完整配置层。
 
 2. 交互式 permission prompt
 - `ask` 在普通 CLI 下仍然会拒绝。
@@ -255,5 +256,5 @@ flowchart TD
 1. Bash AST / compound command 拆分
 2. 交互式 permission prompt
 3. 进度流和 tool start/end 事件对外输出
-4. OS sandbox
+4. OS sandbox backend expansion / strict network mode
 5. MCP / remote bridge

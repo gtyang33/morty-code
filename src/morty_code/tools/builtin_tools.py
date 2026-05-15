@@ -11,6 +11,8 @@ from morty_code.security import (
     assert_safe_bash_command,
     assert_safe_read_path,
     assert_safe_write_path,
+    build_bash_argv,
+    sandbox_metadata,
 )
 from morty_code.tools.tool_registry import ToolRegistry, ToolSpec
 from morty_code.types.runtime_state import CacheSafeParams, FileViewState, ToolUseContext
@@ -332,12 +334,15 @@ def create_local_tool_registry(
             allow_dangerous=bool(context.app_state.get("allow_dangerous_bash", False)),
         )
         timeout_ms = _optional_int(args.get("timeout_ms"), default=120000, minimum=1000, maximum=600000)
-        proc = await asyncio.create_subprocess_shell(
-            command,
+        env = {**os.environ, "PWD": str(root)}
+        argv = build_bash_argv(command, root=root, env=env)
+        sandbox = sandbox_metadata(root, env=env)
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
             cwd=str(root),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env={**os.environ, "PWD": str(root)},
+            env=env,
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_ms / 1000)
@@ -352,6 +357,7 @@ def create_local_tool_registry(
             "timed_out": timed_out,
             "stdout": stdout.decode("utf-8", errors="replace")[-20000:],
             "stderr": stderr.decode("utf-8", errors="replace")[-12000:],
+            "sandbox": sandbox,
         }
 
     async def todo_write(

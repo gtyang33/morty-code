@@ -119,3 +119,12 @@ def test_new_write_tools_respect_security_guards(tmp_path) -> None:
         run_tool(tmp_path, "create_dir", {"path": ".git/hooks"})
     with pytest.raises(SecurityViolation):
         run_tool(tmp_path, "move_path", {"source": "safe.txt", "destination": ".env"})
+
+
+def test_bash_runs_in_os_sandbox_by_default(tmp_path) -> None:
+    result = run_tool(tmp_path, "bash", {"command": "printf ok"})
+
+    assert result["exit_code"] == 0
+    assert result["stdout"] == "ok"
+    assert result["sandbox"]["enabled"] is True
+    assert result["sandbox"]["backend"] == "bwrap"
