@@ -25,6 +25,7 @@ from morty_code.input.handle_input import InputDispatcher
 from morty_code.input.process_user_input import UserInputProcessor
 from morty_code.harness import run_stream_json_harness
 from morty_code.memory.memory_extractor import MemoryExtractor
+from morty_code.memory.model_memory_extractor import ModelMemoryExtractor
 from morty_code.agents.task_registry import get_subagent_task_registry
 from morty_code.prompt.prompt_builder import PromptBuilder
 from morty_code.prompt.prompt_sections import PromptSectionRegistry
@@ -258,7 +259,7 @@ def main() -> None:
         transcript_store=transcript_store,
         auto_compact_decider=AutoCompactDecider(token_threshold=4000),
         compact_agent=CompactAgent(),
-        memory_extractor=MemoryExtractor(),
+        memory_extractor=ModelMemoryExtractor(model_client, fallback=MemoryExtractor()),
     )
     app_state = _runtime_app_state(
         workspace_root=workspace_root,
@@ -302,6 +303,8 @@ def main() -> None:
         tool_context.durable_memory_dir = str(morty_dir / "memory")
         tool_context.app_state.update(app_state)
         print(f"restored {len(restored['messages'])} messages from {transcript_store.path}")
+        for message in restored["messages"]:
+            _print_restored_cli_message(message)
 
     if args.once is not None:
         live_print, printed_ids = _make_live_printer()
@@ -380,6 +383,12 @@ def _print_cli_message(message: Message) -> None:
         print(rendered)
 
 
+def _print_restored_cli_message(message: Message) -> None:
+    rendered = _render_restored_cli_message(message)
+    if rendered:
+        print(rendered)
+
+
 def _mark_running_subagents_interrupted(task_dir: str, process_id: int) -> None:
     """CLI 正常退出时标记未完成后台子代理。
 
@@ -416,6 +425,16 @@ def _render_cli_message(message: Message) -> str:
         return f"[attachment:{attachment_type}]\n{rendered}".strip()
     rendered = _render_content(content, verbose=verbose)
     return f"[{message.type}]\n{rendered}".strip()
+
+
+def _render_restored_cli_message(message: Message) -> str:
+    if message.type != "user":
+        return _render_cli_message(message)
+    content = message.payload.get("content")
+    if _is_tool_result_content(content):
+        return _render_tool_results(content, verbose=os.environ.get("MORTY_VERBOSE_TOOL_OUTPUT") == "1")
+    rendered = _render_content(content, verbose=True)
+    return f"[user]\n{rendered}".strip() if rendered else ""
 
 
 def _render_content(content: object, *, verbose: bool = False) -> str:

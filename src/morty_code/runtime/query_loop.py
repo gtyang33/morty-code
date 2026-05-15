@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Callable
 from uuid import uuid4
 
@@ -307,6 +310,16 @@ class QueryLoop:
                     system_context=active_system_context,
                 )
             except ModelProviderError as exc:
+                dump_event = self._dump_prompt_on_error(
+                    error=exc,
+                    attempt=attempt,
+                    messages=active_messages,
+                    system_prompt=system_prompt,
+                    user_context=user_context,
+                    system_context=active_system_context,
+                )
+                if dump_event is not None:
+                    metadata_events.append(dump_event)
                 if exc.status == 400 and not cache_disabled_for_retry and active_messages is not fallback_messages:
                     cache_disabled_for_retry = True
                     active_messages = fallback_messages
@@ -343,8 +356,21 @@ class QueryLoop:
                         "error": _shorten(exc.detail or str(exc), 2000),
                     }
                 )
-                return self._api_error_message(exc.detail or str(exc), status=exc.status)
+                return self._api_error_message(
+                    self._error_content_with_dump(exc.detail or str(exc), dump_event),
+                    status=exc.status,
+                )
             except Exception as exc:  # noqa: BLE001 - 未分类 provider bug 也要转成 transcript 消息。
+                dump_event = self._dump_prompt_on_error(
+                    error=exc,
+                    attempt=attempt,
+                    messages=active_messages,
+                    system_prompt=system_prompt,
+                    user_context=user_context,
+                    system_context=active_system_context,
+                )
+                if dump_event is not None:
+                    metadata_events.append(dump_event)
                 metadata_events.append(
                     {
                         "type": "query_failed",
@@ -353,7 +379,10 @@ class QueryLoop:
                         "error": _shorten(str(exc), 2000),
                     }
                 )
-                return self._api_error_message(str(exc), status=None)
+                return self._api_error_message(
+                    self._error_content_with_dump(str(exc), dump_event),
+                    status=None,
+                )
         return self._api_error_message("model provider retry loop exhausted", status=None)
 
     def _load_tool_schemas(
@@ -400,9 +429,80 @@ class QueryLoop:
         return min(0.25 * (2 ** (attempt - 1)), 2.0)
 
     def _json_dumps(self, value: object) -> str:
-        import json
-
         return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+    def _error_content_with_dump(
+        self,
+        content: str,
+        dump_event: dict[str, object] | None,
+    ) -> str:
+        if dump_event is None or dump_event.get("type") != "prompt-dump":
+            return content
+        return f"{content}\nPrompt dump: {dump_event.get('path')}"
+
+    def _dump_prompt_on_error(
+        self,
+        *,
+        error: Exception,
+        attempt: int,
+        messages: list[dict[str, object]],
+        system_prompt: list[str],
+        user_context: dict[str, str],
+        system_context: dict[str, str],
+    ) -> dict[str, object] | None:
+        if os.environ.get("MORTY_DUMP_PROMPT_ON_ERROR") != "1":
+            return None
+        dump_dir = Path(os.environ.get("MORTY_PROMPT_DUMP_DIR") or ".morty/prompt-dumps")
+        filename = f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%S.%fZ')}-attempt-{attempt}-{uuid4().hex[:8]}.json"
+        path = dump_dir / filename
+        try:
+            dump_dir.mkdir(parents=True, exist_ok=True)
+            request = {
+                "system_prompt": system_prompt,
+                "user_context": user_context,
+                "system_context": {
+                    key: value
+                    for key, value in system_context.items()
+                    if key not in {"prompt_cache_plan_json", "tool_schemas_json"}
+                },
+                "messages": messages,
+            }
+            payload = {
+                "created_at": datetime.now(UTC).isoformat(),
+                "attempt": attempt,
+                "error": {
+                    "type": error.__class__.__name__,
+                    "message": str(error),
+                    "detail": getattr(error, "detail", None),
+                    "status": getattr(error, "status", None),
+                    "retryable": getattr(error, "retryable", None),
+                },
+                "request": request,
+                "stats": {
+                    "system_prompt_chars": sum(len(part) for part in system_prompt),
+                    "user_context_chars": len(json.dumps(user_context, ensure_ascii=False, default=str)),
+                    "system_context_chars": len(json.dumps(request["system_context"], ensure_ascii=False, default=str)),
+                    "message_count": len(messages),
+                    "messages_chars": len(json.dumps(messages, ensure_ascii=False, default=str)),
+                },
+            }
+            path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+                encoding="utf-8",
+            )
+            return {
+                "type": "prompt-dump",
+                "path": str(path),
+                "filename": filename,
+                "attempt": attempt,
+            }
+        except Exception as dump_error:  # noqa: BLE001 - dump 失败不能遮蔽模型错误。
+            return {
+                "type": "prompt-dump-failed",
+                "path": str(path),
+                "attempt": attempt,
+                "error": _shorten(str(dump_error), 1000),
+            }
 
 
 def _shorten(value: str, limit: int = 500) -> str:

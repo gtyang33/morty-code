@@ -12,6 +12,7 @@ from morty_code import (
     _ReplLexer,
     _Spinner,
     _SPINNER_FRAMES,
+    _render_restored_cli_message,
     _render_cli_message,
 )
 from morty_code.types.messages import Message
@@ -198,6 +199,22 @@ class TestCliMessageRendering:
         message = self._message("user", "hello")
 
         assert _render_cli_message(message) == ""
+
+    def test_restored_plain_user_message_is_shown_with_prefix(self):
+        message = self._message(
+            "user",
+            [{"type": "text", "text": "之前的问题"}],
+        )
+
+        assert _render_restored_cli_message(message) == "[user]\n之前的问题"
+
+    def test_restored_assistant_message_uses_normal_rendering(self):
+        message = self._message(
+            "assistant",
+            [{"type": "text", "text": "之前的回答"}],
+        )
+
+        assert _render_restored_cli_message(message) == "之前的回答"
 
 
 # ---------------------------------------------------------------------------

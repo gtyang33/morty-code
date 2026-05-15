@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from datetime import datetime
 from typing import Callable
 from uuid import uuid4
@@ -34,6 +35,7 @@ class QueryEngine:
         auto_compact_decider: AutoCompactDecider | None = None,
         compact_agent: CompactAgent | None = None,
         memory_extractor: MemoryExtractor | None = None,
+        memory_write_char_threshold: int = 12000,
     ) -> None:
         self.prompt_builder = prompt_builder
         self.input_dispatcher = input_dispatcher
@@ -45,6 +47,7 @@ class QueryEngine:
         )
         self.compact_agent = compact_agent or CompactAgent()
         self.memory_extractor = memory_extractor or MemoryExtractor()
+        self.memory_write_char_threshold = memory_write_char_threshold
         self.messages: list[Message] = []
         self.queue_manager = QueueManager()
         self.recovery = ConversationRecovery()
@@ -192,7 +195,11 @@ class QueryEngine:
             await self.transcript_store.append_event(event)
         if result.new_messages:
             await self.transcript_store.append_messages(result.new_messages)
-            self._write_memories(tool_context, result.new_messages)
+            await self._maybe_write_memories_async(
+                tool_context,
+                result.new_messages,
+                raw_input=raw_input,
+            )
         await self.transcript_store.append_event(
             {
                 "type": "turn_finish",
@@ -279,6 +286,22 @@ class QueryEngine:
 
     def _write_memories(self, tool_context: ToolUseContext, new_messages: list[Message]) -> None:
         candidates = self.memory_extractor.extract(new_messages)
+        self._route_memory_candidates(tool_context, candidates)
+
+    async def _write_memories_async(
+        self,
+        tool_context: ToolUseContext,
+        new_messages: list[Message],
+    ) -> None:
+        extracted = self.memory_extractor.extract(new_messages)
+        candidates = await extracted if inspect.isawaitable(extracted) else extracted
+        self._route_memory_candidates(tool_context, candidates)
+
+    def _route_memory_candidates(
+        self,
+        tool_context: ToolUseContext,
+        candidates,
+    ) -> None:
         if not candidates:
             return
         if tool_context.session_memory_path:
@@ -290,7 +313,59 @@ class QueryEngine:
             durable_store = DurableMemoryStore(tool_context.durable_memory_dir)
             for candidate in candidates:
                 if candidate.target == "durable":
-                    durable_store.append_summary(candidate.text)
+                    durable_store.append_summary(
+                        candidate.text,
+                        memory_type=self._durable_memory_type(candidate.topic),
+                    )
+
+    def _maybe_write_memories(
+        self,
+        tool_context: ToolUseContext,
+        new_messages: list[Message],
+        *,
+        raw_input: str,
+    ) -> bool:
+        if not self._should_write_memories(raw_input):
+            return False
+        self._write_memories(tool_context, new_messages)
+        return True
+
+    async def _maybe_write_memories_async(
+        self,
+        tool_context: ToolUseContext,
+        new_messages: list[Message],
+        *,
+        raw_input: str,
+    ) -> bool:
+        if not self._should_write_memories(raw_input):
+            return False
+        await self._write_memories_async(tool_context, new_messages)
+        return True
+
+    def _should_write_memories(self, raw_input: str) -> bool:
+        if self._is_explicit_memory_request(raw_input):
+            return True
+        return self._approximate_message_chars(self.messages) >= self.memory_write_char_threshold
+
+    def _is_explicit_memory_request(self, raw_input: str) -> bool:
+        normalized = raw_input.strip().lower()
+        if normalized.startswith("/memory"):
+            return True
+        return any(marker in normalized for marker in ("remember this", "记住", "以后记住"))
+
+    def _approximate_message_chars(self, messages: list[Message]) -> int:
+        return sum(len(str(message.payload)) for message in messages)
+
+    def _durable_memory_type(self, topic: str) -> str:
+        return {
+            "preference": "user",
+            "constraint": "project",
+            "environment": "project",
+            "decision": "project",
+            "task": "project",
+            "reference": "reference",
+            "feedback": "feedback",
+        }.get(topic, "project")
 
     def _messages_after_compact_boundary(self) -> list[Message]:
         for index in range(len(self.messages) - 1, -1, -1):

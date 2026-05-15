@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+MEMORY_TYPES = {"user", "feedback", "project", "reference"}
+
 
 class DurableMemoryStore:
     """管理 MEMORY.md 与 topic memory 文件。"""
@@ -23,7 +25,7 @@ class DurableMemoryStore:
         if not self.index_path.exists():
             self.index_path.write_text("# Memory Index\n", encoding="utf-8")
 
-    def append_summary(self, summary: str) -> None:
+    def append_summary(self, summary: str, memory_type: str = "project") -> None:
         self.ensure_exists()
         clean = " ".join(summary.strip().split())
         if not clean:
@@ -31,6 +33,9 @@ class DurableMemoryStore:
         # durable memory 写两份：topic 文件保存完整条目，MEMORY.md 只保存索引。
         # prompt 注入时优先读索引，避免长期记忆无限膨胀。
         topic_path = self._topic_path(clean)
+        self._ensure_topic_frontmatter(topic_path, clean, memory_type)
+        if self._topic_contains(topic_path, clean):
+            return
         with topic_path.open("a", encoding="utf-8") as file:
             file.write(f"- {clean}\n")
         with self.index_path.open("a", encoding="utf-8") as file:
@@ -46,6 +51,42 @@ class DurableMemoryStore:
         words = re.findall(r"[A-Za-z0-9\u4e00-\u9fff]+", summary.lower())[:8]
         stem = "-".join(words)[:80] or "memory"
         return self.root_dir / f"{stem}.md"
+
+    def _ensure_topic_frontmatter(
+        self,
+        topic_path: Path,
+        summary: str,
+        memory_type: str,
+    ) -> None:
+        if topic_path.exists() and topic_path.read_text(encoding="utf-8", errors="replace").strip():
+            return
+        clean_type = memory_type if memory_type in MEMORY_TYPES else "project"
+        topic_path.write_text(
+            "\n".join(
+                [
+                    "---",
+                    f"name: {self._frontmatter_name(summary)}",
+                    f"description: {summary[:180]}",
+                    f"type: {clean_type}",
+                    "---",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def _frontmatter_name(self, summary: str) -> str:
+        words = re.findall(r"[A-Za-z0-9\u4e00-\u9fff]+", summary)[:8]
+        return " ".join(words)[:80] or "memory"
+
+    def _topic_contains(self, topic_path: Path, summary: str) -> bool:
+        content = topic_path.read_text(encoding="utf-8", errors="replace")
+        target = " ".join(summary.lower().split())
+        for line in content.splitlines():
+            normalized = " ".join(line.removeprefix("-").strip().lower().split())
+            if normalized == target:
+                return True
+        return False
 
     def _truncate_index(self) -> None:
         # MEMORY.md 是 prompt 热路径的一部分，必须同时限制行数和字节数；

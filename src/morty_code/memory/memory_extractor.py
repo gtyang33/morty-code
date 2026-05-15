@@ -6,6 +6,7 @@ from typing import Literal
 from morty_code.types.messages import Message
 
 MemoryTarget = Literal["session", "durable"]
+DurableMemoryType = Literal["user", "feedback", "project", "reference"]
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,7 @@ class MemoryCandidate:
     topic: str
     confidence: float
     reason: str
+    memory_type: DurableMemoryType | None = None
 
 
 class MemoryExtractor:

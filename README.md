@@ -42,6 +42,19 @@ UV_CACHE_DIR=/tmp/uv-cache uv run morty-code \
 
 也可以通过环境变量设置：`MORTY_API_TIMEOUT=300`，兼容读取 `OPENAI_TIMEOUT` 和 `LLM_TIMEOUT`。
 
+排查 provider 报错时，可以打开 prompt dump。开启后，每次模型请求报错都会把当次实际发送给模型的 `system_prompt`、`user_context`、`system_context` 和 `messages` 写入 JSON 文件，并在错误消息中打印文件路径：
+
+```bash
+MORTY_DUMP_PROMPT_ON_ERROR=1 \
+MORTY_PROMPT_DUMP_DIR=.morty/prompt-dumps \
+UV_CACHE_DIR=/tmp/uv-cache uv run morty-code \
+  --provider openai-compatible \
+  --model deepseek-chat \
+  --once "总结当前功能"
+```
+
+默认目录是 `.morty/prompt-dumps`。dump 可能包含源码片段、memory、工具结果或用户输入，分析后按需删除。
+
 当前已实现：
 
 - cache-safe prompt 构建
@@ -54,6 +67,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run morty-code \
 - tool_use -> tool_result 的多轮回灌
 - slash command 权限附件，例如 `/compact` 显式禁用工具
 - durable/session memory 的预算控制与索引截断
+- memory 写入默认使用当前模型提取结构化候选，provider 失败或非 JSON 响应时回退到规则提取
 - compact 后重新注入已读文件视图和 session memory
 - resume/recovery 时清理孤儿 tool_result 与空 assistant 消息
 - 大 tool_result 稳定替换，避免长会话 prompt 膨胀
@@ -76,4 +90,5 @@ UV_CACHE_DIR=/tmp/uv-cache uv run morty-code \
 - compact 摘要会保留用户目标、助手动作、工具调用/结果和关键附件状态
 - prompt cache 计划与漂移检测：system boundary、message cache marker、tool schema marker、cache usage 记录
 - provider/API 失败会记录 retry、cache 降级和 query_failed metadata，并返回可落盘的 assistant error message
+- 可选 prompt dump：`MORTY_DUMP_PROMPT_ON_ERROR=1` 时 provider 报错会落盘当次模型请求 prompt，并在错误消息里打印 dump 路径
 - attachment 分为 input/delta/reinjection 阶段，并带 stable_key、统一预算与去重
