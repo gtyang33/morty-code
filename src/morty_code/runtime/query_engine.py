@@ -269,17 +269,19 @@ class QueryEngine:
             return []
 
     def _write_memories(self, tool_context: ToolUseContext, new_messages: list[Message]) -> None:
-        summaries = self.memory_extractor.extract(new_messages)
-        if not summaries:
+        candidates = self.memory_extractor.extract(new_messages)
+        if not candidates:
             return
         if tool_context.session_memory_path:
             session_store = SessionMemoryStore(tool_context.session_memory_path)
-            for summary in summaries:
-                session_store.append_note(summary)
+            for candidate in candidates:
+                if candidate.target == "session":
+                    session_store.append_note(candidate.text)
         if tool_context.durable_memory_dir:
             durable_store = DurableMemoryStore(tool_context.durable_memory_dir)
-            for summary in summaries:
-                durable_store.append_summary(summary)
+            for candidate in candidates:
+                if candidate.target == "durable":
+                    durable_store.append_summary(candidate.text)
 
     def _messages_after_compact_boundary(self) -> list[Message]:
         for index in range(len(self.messages) - 1, -1, -1):
