@@ -79,6 +79,7 @@ class QueryEngine:
         new_messages: list[Message] = []
         should_query = False
         should_compact = False
+        scoped_tools: list[str] | None = None
         index = 0
         while queued_commands:
             command = queued_commands.pop(0)
@@ -95,7 +96,7 @@ class QueryEngine:
                 should_query = processed.should_query
             should_compact = should_compact or processed.trigger_compact
             if processed.allowed_tools is not None:
-                tool_context.tools = processed.allowed_tools
+                scoped_tools = processed.allowed_tools
             if processed.model is not None:
                 tool_context.model = processed.model
             if processed.next_input is not None:
@@ -147,10 +148,16 @@ class QueryEngine:
         # compact 后只发送 boundary 之后的上下文，避免已经被摘要覆盖的旧消息
         # 再次进入 prompt，造成 token 浪费或工具配对重复。
         messages_for_query = self._messages_after_compact_boundary()
-        system_prompt, user_context, system_context = await self.prompt_builder.build_for_context(
-            tool_context
-        )
+        original_tools = list(tool_context.tools)
         try:
+            if scoped_tools is not None:
+                # Slash command 的 allowed_tools 只约束当前生成的 prompt，不能永久
+                # 改写 session 工具集；否则 /memory、/compact 这类空工具命令会让
+                # 后续普通用户输入全部变成 tool unavailable。
+                tool_context.tools = scoped_tools
+            system_prompt, user_context, system_context = await self.prompt_builder.build_for_context(
+                tool_context
+            )
             # QueryLoop 会在模型/工具之间多轮往返；on_new_messages 用于 CLI
             # 实时打印，不改变 transcript 的最终 append-only 语义。
             result = await self.query_loop.run(
@@ -176,6 +183,8 @@ class QueryEngine:
             )
             await self.transcript_store.append_messages([error_message])
             return [error_message]
+        finally:
+            tool_context.tools = original_tools
         self.messages.extend(result.new_messages)
         # metadata event 与 message 分开追加：event 用于诊断和恢复辅助，不会
         # 进入下一轮模型上下文。
