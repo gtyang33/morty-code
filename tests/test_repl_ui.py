@@ -6,15 +6,18 @@ import sys
 import time
 
 from prompt_toolkit.document import Document
+from prompt_toolkit.completion import CompleteEvent
 
 from morty_code import (
     _MORTY_STYLE,
     _ReplLexer,
+    _SlashCommandCompleter,
     _Spinner,
     _SPINNER_FRAMES,
     _render_restored_cli_message,
     _render_cli_message,
 )
+from morty_code.input.commands import CommandRegistry, CommandSpec
 from morty_code.types.messages import Message
 
 
@@ -121,6 +124,49 @@ class TestMortyStyle:
         style_classes = {name for name, _style in _MORTY_STYLE.style_rules}
         for cls in ("slash", "command", "argument"):
             assert cls in style_classes
+
+
+# ---------------------------------------------------------------------------
+# Slash command completion
+# ---------------------------------------------------------------------------
+
+
+class TestSlashCommandCompleter:
+    """输入 / 时应提示可用 slash command。"""
+
+    async def _noop(self, args, context):
+        return {"mode": "local", "content": ""}
+
+    def _completions(self, text: str):
+        registry = CommandRegistry(
+            [
+                CommandSpec("help", "显示帮助", "local", self._noop),
+                CommandSpec("memory", "刷新记忆", "prompt", self._noop),
+                CommandSpec("hidden", "隐藏命令", "local", self._noop, user_invocable=False),
+            ]
+        )
+        completer = _SlashCommandCompleter(registry)
+        return list(
+            completer.get_completions(
+                Document(text, cursor_position=len(text)),
+                CompleteEvent(completion_requested=True),
+            )
+        )
+
+    def test_slash_lists_user_invocable_commands(self):
+        completions = self._completions("/")
+
+        assert [completion.text for completion in completions] == ["/help", "/memory"]
+        assert [completion.start_position for completion in completions] == [-1, -1]
+
+    def test_slash_prefix_filters_commands(self):
+        completions = self._completions("/me")
+
+        assert [completion.text for completion in completions] == ["/memory"]
+        assert completions[0].start_position == -3
+
+    def test_plain_text_does_not_complete_slash_commands(self):
+        assert self._completions("hello /") == []
 
 
 # ---------------------------------------------------------------------------

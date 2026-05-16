@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.lexers import Lexer
@@ -21,6 +22,7 @@ from morty_code.api.model_client import EchoModelClient, OpenAICompatibleModelCl
 from morty_code.attachments.attachment_manager import AttachmentManager
 from morty_code.compact.auto_compact import AutoCompactDecider
 from morty_code.compact.compact_agent import CompactAgent
+from morty_code.input.commands import CommandRegistry
 from morty_code.input.handle_input import InputDispatcher
 from morty_code.input.process_user_input import UserInputProcessor
 from morty_code.harness import run_stream_json_harness
@@ -137,6 +139,34 @@ class _ReplLexer(Lexer):
             return [("", line)]
 
         return get_line
+
+
+class _SlashCommandCompleter(Completer):
+    """为 REPL 提供 slash command 补全。"""
+
+    def __init__(self, command_registry: CommandRegistry) -> None:
+        """初始化对象状态。"""
+        self.command_registry = command_registry
+
+    def get_completions(self, document, complete_event):
+        """输入行以 / 开头时提示用户可调用命令。"""
+        text_before_cursor = document.text_before_cursor
+        if not text_before_cursor.startswith("/") or " " in text_before_cursor:
+            return
+        prefix = text_before_cursor[1:]
+        commands = sorted(
+            self.command_registry.list_user_invocable(),
+            key=lambda command: command.name,
+        )
+        for command in commands:
+            if not command.name.startswith(prefix):
+                continue
+            yield Completion(
+                f"/{command.name}",
+                start_position=-len(text_before_cursor),
+                display=f"/{command.name}",
+                display_meta=command.description,
+            )
 
 
 class _Spinner:
@@ -259,10 +289,11 @@ def main() -> None:
     )
     permission_mode = permission_settings.default_mode or "default"
     tool_runner = ToolRunner(tool_registry) if tool_registry is not None else NullToolRunner()
+    input_processor = UserInputProcessor(AttachmentManager())
     engine = QueryEngine(
         prompt_builder=PromptBuilder(PromptSectionRegistry()),
         input_dispatcher=InputDispatcher(),
-        input_processor=UserInputProcessor(AttachmentManager()),
+        input_processor=input_processor,
         query_loop=QueryLoop(model_client, tool_runner),
         transcript_store=transcript_store,
         auto_compact_decider=AutoCompactDecider(token_threshold=4000),
@@ -336,6 +367,7 @@ def main() -> None:
     session: PromptSession[str] = PromptSession(
         history=FileHistory(str(history_file)),
         lexer=_ReplLexer(),
+        completer=_SlashCommandCompleter(input_processor.command_registry),
         style=_MORTY_STYLE,
     )
     spinner = _Spinner()
