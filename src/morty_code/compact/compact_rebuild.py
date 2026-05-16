@@ -12,9 +12,12 @@ def rebuild_post_compact_messages(
 ) -> list[Message]:
     """compact 后重建新的可继续执行消息序列。"""
 
-    rebuilt = [*summary_messages, *messages_to_keep]
+    # Claude Code 的 compact 后上下文会先恢复弱持久化状态，再继续保留尾部消息；
+    # 这样模型读取 retained tail 前，已经能看到文件视图、计划模式和 session memory。
+    rebuilt = [*summary_messages]
     if attachments:
         rebuilt.extend(attachments)
+    rebuilt.extend(messages_to_keep)
     return rebuilt
 
 

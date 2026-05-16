@@ -266,7 +266,7 @@ def main() -> None:
         query_loop=QueryLoop(model_client, tool_runner),
         transcript_store=transcript_store,
         auto_compact_decider=AutoCompactDecider(token_threshold=4000),
-        compact_agent=CompactAgent(),
+        compact_agent=CompactAgent(model_client=model_client),
         memory_extractor=ModelMemoryExtractor(model_client, fallback=MemoryExtractor()),
     )
     app_state = _runtime_app_state(

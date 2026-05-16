@@ -1,9 +1,32 @@
 from __future__ import annotations
 
-from datetime import datetime
+import re
+from datetime import UTC, datetime
+from typing import Protocol
 from uuid import uuid4
 
 from morty_code.types.messages import Message
+
+
+ERROR_MESSAGE_NOT_ENOUGH_MESSAGES = "Not enough messages to compact."
+
+_NO_TOOLS_COMPACT_SYSTEM_PROMPT = (
+    "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools. "
+    "Tool calls will be rejected and will waste the compact turn. "
+    "Write an <analysis> block followed by a <summary> block."
+)
+
+
+class CompactModelClient(Protocol):
+    async def respond(
+        self,
+        messages: list[dict[str, object]],
+        system_prompt: list[str],
+        user_context: dict[str, str],
+        system_context: dict[str, str],
+    ) -> Message:
+        """使用模型生成 compact 摘要。"""
+        ...
 
 
 class CompactAgent:
@@ -13,10 +36,21 @@ class CompactAgent:
     Python MVP 无外部依赖，同时保留 compact boundary 的状态迁移语义。
     """
 
+    def __init__(
+        self,
+        max_summary_chars: int = 12000,
+        model_client: CompactModelClient | None = None,
+        max_compact_prompt_chars: int = 60000,
+    ) -> None:
+        """初始化 compact 摘要的总字符预算。"""
+        self.max_summary_chars = max_summary_chars
+        self.model_client = model_client
+        self.max_compact_prompt_chars = max_compact_prompt_chars
+
     async def summarize(self, messages: list[Message], trigger: str = "auto") -> list[Message]:
         """压缩并总结上下文内容。"""
-        summary = _build_structured_summary(messages)
-        now = datetime.utcnow().isoformat()
+        summary = await self._summarize_text(messages)
+        now = datetime.now(UTC).isoformat()
         return [
             Message(
                 uuid=str(uuid4()),
@@ -49,18 +83,47 @@ class CompactAgent:
             ),
         ]
 
+    async def _summarize_text(self, messages: list[Message]) -> str:
+        """优先使用 no-tools 模型总结，失败时回退到规则摘要。"""
+        if self.model_client is None:
+            return _build_structured_summary(messages, max_summary_chars=self.max_summary_chars)
+        try:
+            response = await self.model_client.respond(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": _build_compact_prompt(
+                            messages,
+                            max_chars=self.max_compact_prompt_chars,
+                        ),
+                    }
+                ],
+                system_prompt=[_NO_TOOLS_COMPACT_SYSTEM_PROMPT],
+                user_context={},
+                system_context={},
+            )
+            summary = _extract_model_summary(response)
+            if summary:
+                return _truncate(summary, self.max_summary_chars)
+        except Exception:
+            # compact 是上下文维护动作，模型总结失败不能打断主对话。
+            pass
+        return _build_structured_summary(messages, max_summary_chars=self.max_summary_chars)
+
     async def compact_messages(
         self,
         messages: list[Message],
         trigger: str = "auto",
     ) -> tuple[list[Message], list[Message]]:
         """处理该方法负责的业务逻辑。"""
+        if not messages:
+            raise ValueError(ERROR_MESSAGE_NOT_ENOUGH_MESSAGES)
         summary_messages = await self.summarize(messages, trigger=trigger)
         # 保留尾部最近消息，作为 compact 后可继续执行的 retained tail。
         return summary_messages, _select_pair_safe_tail(messages, limit=8)
 
 
-def _build_structured_summary(messages: list[Message]) -> str:
+def _build_structured_summary(messages: list[Message], max_summary_chars: int = 12000) -> str:
     """生成可续跑摘要，避免 compact 后只剩模糊聊天片段。"""
 
     user_intents: list[str] = []
@@ -77,6 +140,9 @@ def _build_structured_summary(messages: list[Message]) -> str:
             assistant_notes.extend(_extract_assistant_text(content))
             tool_uses.extend(_extract_tool_uses(content))
         elif message.type == "attachment":
+            if message.payload.get("source") == "post_compact_reinject":
+                # compact 后会重新注入的附件不再进入摘要，避免重复放大上下文。
+                continue
             attachment_type = str(message.payload.get("attachment_type", "unknown"))
             source = str(message.payload.get("path") or message.payload.get("source") or "")
             attachments.append(f"- {attachment_type}: {source}".rstrip())
@@ -95,7 +161,71 @@ def _build_structured_summary(messages: list[Message]) -> str:
             rendered.extend(f"- {_truncate(item, 500)}" for item in items if item.strip())
         else:
             rendered.append("- 无")
-    return "\n".join(rendered)
+    return _fit_summary_budget(rendered, max_summary_chars)
+
+
+def _build_compact_prompt(messages: list[Message], max_chars: int) -> str:
+    """构建 Claude Code 风格的 compact 请求，并按预算保留最新消息。"""
+    header = (
+        "Your task is to create a detailed summary of the conversation so far. "
+        "Capture the user's explicit requests, important technical decisions, "
+        "files changed or inspected, errors and fixes, pending tasks, current work, "
+        "and the next step if it is directly implied by the latest request. "
+        "Return an <analysis> block followed by a <summary> block.\n\n"
+        "Sanitized recent conversation:\n"
+    )
+    entries = _render_sanitized_messages(messages[-80:])
+    return _fit_prompt_budget(header, entries, max_chars)
+
+
+def _render_sanitized_messages(messages: list[Message]) -> list[str]:
+    """把消息转成 compact 模型可读的净化文本，避免媒体和大结果进入请求。"""
+    rendered: list[str] = []
+    for message in messages:
+        if message.type == "attachment" and message.payload.get("source") == "post_compact_reinject":
+            continue
+        content = message.payload.get("content")
+        if message.type == "user":
+            parts = [*_extract_user_visible_text(content), *_extract_tool_results(content)]
+        elif message.type == "assistant":
+            parts = [*_extract_assistant_text(content), *_extract_tool_uses(content)]
+        elif message.type == "attachment":
+            attachment_type = str(message.payload.get("attachment_type", "unknown"))
+            source = str(message.payload.get("path") or message.payload.get("source") or "")
+            parts = [f"attachment {attachment_type}: {source}".rstrip()]
+        else:
+            parts = []
+        if parts:
+            rendered.append(f"{message.type} {message.uuid}: " + "\n".join(_truncate(part, 1000) for part in parts))
+    return rendered
+
+
+def _fit_prompt_budget(header: str, entries: list[str], max_chars: int) -> str:
+    """按 compact prompt 预算从后往前保留消息。"""
+    if len(header) >= max_chars:
+        return header[:max_chars]
+    kept: list[str] = []
+    for entry in reversed(entries):
+        candidate = header + "\n\n".join([entry, *kept])
+        if len(candidate) <= max_chars:
+            kept = [entry, *kept]
+            continue
+        if not kept:
+            remaining = max_chars - len(header)
+            kept = [entry[:remaining]]
+        break
+    return (header + "\n\n".join(kept))[:max_chars]
+
+
+def _extract_model_summary(response: Message) -> str:
+    """从模型 compact 响应中剥离 analysis，只保留 summary 正文。"""
+    text = "\n".join(_extract_assistant_text(response.payload.get("content")))
+    if not text.strip():
+        return ""
+    summary_match = re.search(r"<summary>\s*(.*?)\s*</summary>", text, flags=re.DOTALL | re.IGNORECASE)
+    if summary_match:
+        return summary_match.group(1).strip()
+    return re.sub(r"<analysis>.*?</analysis>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
 
 
 def _extract_user_visible_text(content: object) -> list[str]:
@@ -161,16 +291,48 @@ def _extract_tool_results(content: object) -> list[str]:
 def _stringify_content(content: object) -> str:
     """内部处理该方法负责的业务逻辑。"""
     if isinstance(content, str):
+        if content.lstrip().startswith("<persisted-output>"):
+            return "[persisted tool result]"
         return content
     if isinstance(content, list):
         parts = []
         for item in content:
             if isinstance(item, dict) and item.get("type") == "text":
                 parts.append(str(item.get("text", "")))
+            elif isinstance(item, dict) and item.get("type") == "image":
+                parts.append("[image]")
+            elif isinstance(item, dict) and item.get("type") == "document":
+                parts.append("[document]")
+            elif isinstance(item, dict) and item.get("type") == "tool_reference":
+                parts.append("[tool reference removed]")
             elif isinstance(item, dict):
-                parts.append(str(item))
+                parts.append("[structured tool content]")
         return "\n".join(parts)
     return str(content)
+
+
+def _fit_summary_budget(lines: list[str], max_chars: int) -> str:
+    """按总字符预算裁剪摘要，优先丢弃较早的条目并保留章节骨架。"""
+    kept = list(lines)
+    rendered = "\n".join(kept)
+    if len(rendered) <= max_chars:
+        return rendered
+    while len(rendered) > max_chars:
+        removable_index = next(
+            (
+                index
+                for index, line in enumerate(kept)
+                if line.startswith("- ") and line != "- 无"
+            ),
+            None,
+        )
+        if removable_index is None:
+            break
+        del kept[removable_index]
+        rendered = "\n".join(kept)
+    if len(rendered) <= max_chars:
+        return rendered
+    return rendered[: max(0, max_chars - 3)] + "..."
 
 
 def _truncate(text: str, max_chars: int) -> str:
