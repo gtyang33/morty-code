@@ -22,6 +22,7 @@ class SandboxConfig:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "SandboxConfig":
+        """从外部状态构建对象。"""
         values = env or os.environ
         enabled = values.get("MORTY_DISABLE_OS_SANDBOX") != "1"
         bwrap_path = shutil.which("bwrap", path=values.get("PATH"))
@@ -44,7 +45,7 @@ def build_bash_argv(
     env: Mapping[str, str] | None = None,
     config: SandboxConfig | None = None,
 ) -> list[str]:
-    """Build argv for running a bash-tool command, sandboxed by default."""
+    """构建默认带 OS sandbox 的 bash 工具 argv。"""
 
     sandbox = config or SandboxConfig.from_env(env)
     if not sandbox.enabled:
@@ -84,6 +85,7 @@ def build_bash_argv(
 
 
 def sandbox_metadata(root: Path, *, env: Mapping[str, str] | None = None) -> dict[str, object]:
+    """处理该方法负责的业务逻辑。"""
     config = SandboxConfig.from_env(env)
     return {
         "enabled": config.enabled,
@@ -98,6 +100,7 @@ def sandbox_metadata(root: Path, *, env: Mapping[str, str] | None = None) -> dic
 
 
 def _readonly_mount_args() -> list[str]:
+    """内部读取持久化内容。"""
     args: list[str] = []
     for raw_path in ("/usr", "/bin", "/lib", "/lib64"):
         path = Path(raw_path)
@@ -107,6 +110,7 @@ def _readonly_mount_args() -> list[str]:
 
 
 def _workspace_mount_args(workspace: Path) -> list[str]:
+    """内部处理该方法负责的业务逻辑。"""
     args: list[str] = []
     tmp = Path("/tmp")
     if tmp.exists():
@@ -120,6 +124,7 @@ def _workspace_mount_args(workspace: Path) -> list[str]:
 
 @lru_cache(maxsize=4)
 def _can_unshare_network(bwrap_path: str) -> bool:
+    """内部处理该方法负责的业务逻辑。"""
     try:
         proc = subprocess.run(
             [

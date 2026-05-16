@@ -13,6 +13,7 @@ class TranscriptStore:
     """append-only transcript 存储，主链和 sidechain parent 分开维护。"""
 
     def __init__(self, path: Path, session_id: str) -> None:
+        """初始化对象状态。"""
         self.path = path
         self.session_id = session_id
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -23,6 +24,7 @@ class TranscriptStore:
     def for_session_dir(cls, session_dir: str | Path) -> "TranscriptStore":
         # 新会话使用随机 uuid 做文件名，避免同一 workspace 同时启动多个
         # morty-code 实例时互相覆盖 transcript。
+        """处理该方法负责的业务逻辑。"""
         session_root = Path(session_dir)
         session_root.mkdir(parents=True, exist_ok=True)
         session_id = str(uuid4())
@@ -61,6 +63,7 @@ class TranscriptStore:
     ) -> str | None:
         # parent_uuid 是 transcript 恢复和 UI 串联的基础。主链和 sidechain
         # 分别维护 parent，避免子代理写入打乱父会话的线性上下文。
+        """追加运行过程产生的数据。"""
         if starting_parent_uuid is not None:
             parent_uuid = starting_parent_uuid
         elif is_sidechain:
@@ -88,6 +91,7 @@ class TranscriptStore:
     async def append_event(self, event: dict[str, object]) -> None:
         # event 不参与模型上下文，只用于恢复、诊断和后续统计；仍放进同一个
         # append-only 文件，保证一条 session 的行为轨迹可以单文件审计。
+        """追加运行过程产生的数据。"""
         with self.path.open("a", encoding="utf-8") as file:
             entry = {
                 "parent_uuid": None,
@@ -101,6 +105,7 @@ class TranscriptStore:
     async def load_session(self, include_sidechains: bool = False) -> LoadedTranscript:
         # 默认只加载主链。sidechain 是子代理/分叉执行细节，直接混进主链会让
         # 模型看到重复或不该继承的探索过程。
+        """加载外部配置或数据。"""
         messages: list[Message] = []
         events: list[dict[str, object]] = []
         last_parent_uuid: str | None = None

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from morty_code.types.messages import Message
 from morty_code.types.runtime_state import ContentReplacementState, FileViewState, ToolUseContext
+from morty_code.tools.tool_result_budget import PERSISTED_OUTPUT_TAG
 
 
 class SessionRestore:
@@ -12,6 +13,7 @@ class SessionRestore:
         messages: list[Message],
         metadata: dict[str, object],
     ) -> dict[str, object]:
+        """从历史记录恢复运行状态。"""
         read_file_state: dict[str, FileViewState] = {}
         content_replacement_state = ContentReplacementState()
         plan_state: dict[str, object] = {}
@@ -69,6 +71,7 @@ class SessionRestore:
         message: Message,
         state: ContentReplacementState,
     ) -> None:
+        """内部从历史记录恢复运行状态。"""
         content = message.payload.get("content")
         if not isinstance(content, list):
             return
@@ -77,7 +80,14 @@ class SessionRestore:
                 continue
             tool_use_id = str(block.get("tool_use_id", ""))
             result_content = block.get("content")
-            if tool_use_id and isinstance(result_content, str) and result_content.startswith("[Tool result "):
+            if (
+                tool_use_id
+                and isinstance(result_content, str)
+                and (
+                    result_content.startswith("[Tool result ")
+                    or result_content.startswith(PERSISTED_OUTPUT_TAG)
+                )
+            ):
                 state.seen_ids.add(tool_use_id)
                 state.replacements[tool_use_id] = result_content
 
@@ -88,6 +98,7 @@ class SessionRestore:
     ) -> None:
         # QueryLoop 的 aggregate budget 会把替换记录写成 metadata event。恢复时
         # 也要读回来，覆盖那些已经不在当前主链消息里的旧 tool_result 决策。
+        """从历史记录恢复运行状态。"""
         for event in events:
             if event.get("type") != "content-replacement":
                 continue

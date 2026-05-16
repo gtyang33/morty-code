@@ -27,16 +27,20 @@ class CommandRegistry:
     """轻量命令注册表。"""
 
     def __init__(self, commands: list[CommandSpec] | None = None) -> None:
+        """初始化对象状态。"""
         self._commands = commands or []
 
     def register(self, command: CommandSpec) -> None:
+        """注册可供后续使用的条目。"""
         self._commands.append(command)
 
     def find(self, name: str) -> CommandSpec | None:
+        """查找匹配的注册项或数据。"""
         for command in self._commands:
             if command.name == name or name in command.aliases:
                 return command
         return None
 
     def list_user_invocable(self) -> list[CommandSpec]:
+        """列出可用条目。"""
         return [command for command in self._commands if command.user_invocable]

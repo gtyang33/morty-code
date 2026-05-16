@@ -21,10 +21,12 @@ class AttachmentManager:
     """负责首轮同步附件与轮尾增量附件。"""
 
     def __init__(self, relevant_memory_finder: RelevantMemoryFinder | None = None) -> None:
+        """初始化对象状态。"""
         self.relevant_memory_finder = relevant_memory_finder
 
     @classmethod
     def from_context(cls, context: ToolUseContext) -> "AttachmentManager":
+        """从外部状态构建对象。"""
         finder = None
         if context.durable_memory_dir:
             finder = RelevantMemoryFinder(context.durable_memory_dir)
@@ -36,6 +38,7 @@ class AttachmentManager:
         context: ToolUseContext,
         messages: list[Message],
     ) -> list[Attachment]:
+        """收集当前阶段需要的上下文。"""
         attachments: list[Attachment] = []
         # input 阶段附件只和真实用户输入绑定：plan mode 提醒、@file 读取、
         # relevant memory 都在模型采样前一次性 materialize。
@@ -55,6 +58,7 @@ class AttachmentManager:
     def _collect_input_mode_context(self, context: ToolUseContext) -> list[Attachment]:
         # /auto 退出 plan mode 后需要在下一轮显式告知模型“现在可以实现”，
         # 这个一次性标记由 slash command 写入 app_state，这里消费并清除。
+        """内部收集当前阶段需要的上下文。"""
         if context.app_state.pop("needs_plan_mode_exit_attachment", False):
             return [self._build_plan_mode_exit_attachment(context, phase="input")]
         if not context.app_state.get("plan_mode"):
@@ -83,6 +87,7 @@ class AttachmentManager:
         messages: list[Message],
         queued_commands: list[QueuedCommand],
     ) -> list[Attachment]:
+        """收集当前阶段需要的上下文。"""
         attachments: list[Attachment] = []
         # delta 阶段附件发生在一次工具/模型循环之后，用于补充“本轮执行后”
         # 才能知道的事实，例如日期变化、hook 注入、后台任务通知。
@@ -135,7 +140,7 @@ class AttachmentManager:
                         "path": file_state.path,
                         "resolved_path": file_state.path,
                         "kind": "file",
-                        "content": file_state.content,
+                        "content": self._reinject_file_view_content(file_state),
                         "truncated": file_state.is_partial_view,
                         "source": "post_compact_reinject",
                     },
@@ -247,6 +252,7 @@ class AttachmentManager:
         timestamp: str | None = None,
         origin: dict[str, object] | None = None,
     ) -> Message:
+        """转换为目标数据结构。"""
         return Message(
             uuid=str(uuid4()),
             timestamp=timestamp or datetime.utcnow().isoformat(),
@@ -276,6 +282,7 @@ class AttachmentManager:
         raw_path: str,
         context: ToolUseContext,
     ) -> Attachment:
+        """内部构建后续流程需要的数据。"""
         cwd = Path(str(context.app_state.get("cwd", "."))).expanduser()
         path = Path(raw_path).expanduser()
         resolved = path if path.is_absolute() else cwd / path
@@ -319,6 +326,7 @@ class AttachmentManager:
         return Attachment(type="at_mentioned_file", payload=payload)
 
     def _collect_date_change(self, context: ToolUseContext) -> list[Attachment]:
+        """内部收集当前阶段需要的上下文。"""
         current_date = date.today().isoformat()
         previous_date = context.app_state.get("last_attachment_date")
         context.app_state["last_attachment_date"] = current_date
@@ -335,6 +343,7 @@ class AttachmentManager:
         ]
 
     def _collect_mode_reminders(self, context: ToolUseContext) -> list[Attachment]:
+        """内部收集当前阶段需要的上下文。"""
         turn_index = int(context.app_state.get("turn_index", 0)) + 1
         context.app_state["turn_index"] = turn_index
         plan_mode = bool(context.app_state.get("plan_mode", False))
@@ -371,6 +380,7 @@ class AttachmentManager:
         context: ToolUseContext,
         phase: AttachmentPhase,
     ) -> Attachment:
+        """内部构建后续流程需要的数据。"""
         return Attachment(
             type="plan_mode_exit",
             payload={
@@ -384,6 +394,7 @@ class AttachmentManager:
         )
 
     def _collect_hook_context(self, context: ToolUseContext) -> list[Attachment]:
+        """内部收集当前阶段需要的上下文。"""
         queue = context.app_state.get("hook_context_queue")
         if not isinstance(queue, list) or not queue:
             return []
@@ -400,6 +411,7 @@ class AttachmentManager:
         ]
 
     def _tag_relevant_memories(self, attachments: list[Attachment]) -> list[Attachment]:
+        """内部处理该方法负责的业务逻辑。"""
         tagged: list[Attachment] = []
         for attachment in attachments:
             attachment.phase = "input"
@@ -415,6 +427,7 @@ class AttachmentManager:
         phase: AttachmentPhase,
         allow_seen_stable_keys: bool,
     ) -> list[Attachment]:
+        """内部处理该方法负责的业务逻辑。"""
         max_count = int(context.app_state.get("max_attachments_per_turn", DEFAULT_MAX_ATTACHMENTS_PER_TURN))
         max_chars = int(context.app_state.get("max_attachment_chars", DEFAULT_MAX_ATTACHMENT_CHARS))
         seen = set() if allow_seen_stable_keys else self._seen_stable_keys(messages)
@@ -435,7 +448,22 @@ class AttachmentManager:
             context.app_state["last_attachment_finalize_dropped"] = dropped
         return result
 
+    def _reinject_file_view_content(self, file_state: FileViewState) -> str:
+        """内部处理该方法负责的业务逻辑。"""
+        line_count = file_state.content.count("\n") + (1 if file_state.content else 0)
+        return (
+            "previously read file view is still available in runtime state, but "
+            "the full content was not re-injected after compaction to keep the "
+            "prompt small.\n"
+            f"Path: {file_state.path}\n"
+            f"Viewed chars: {len(file_state.content)}\n"
+            f"Viewed lines: {line_count}\n"
+            f"Partial view: {file_state.is_partial_view}\n"
+            "Use read_file with offset/limit if exact content is needed again."
+        )
+
     def _apply_budget(self, attachment: Attachment, max_chars: int) -> Attachment:
+        """内部处理该方法负责的业务逻辑。"""
         content = attachment.payload.get("content")
         if not isinstance(content, str) or len(content) <= max_chars:
             return attachment
@@ -453,6 +481,7 @@ class AttachmentManager:
         )
 
     def _seen_stable_keys(self, messages: list[Message]) -> set[str]:
+        """内部处理该方法负责的业务逻辑。"""
         return {
             str(message.payload.get("stable_key"))
             for message in messages
@@ -460,6 +489,7 @@ class AttachmentManager:
         }
 
     def _stable_key_for(self, attachment: Attachment) -> str:
+        """内部处理该方法负责的业务逻辑。"""
         path = attachment.payload.get("resolved_path") or attachment.payload.get("path")
         if path:
             return f"{attachment.phase}:{attachment.type}:{path}"

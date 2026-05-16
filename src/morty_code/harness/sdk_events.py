@@ -59,6 +59,7 @@ def result_event(
     success: bool = True,
     error: str | None = None,
 ) -> dict[str, Any]:
+    """处理该方法负责的业务逻辑。"""
     payload: dict[str, Any] = {
         "type": "result",
         "subtype": "success" if success else "error",

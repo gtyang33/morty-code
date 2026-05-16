@@ -145,3 +145,30 @@ def test_tool_runner_records_unavailable_tool_event() -> None:
     asyncio.run(ToolRunner(registry).run(message, context, make_cache()))
 
     assert context.app_state["tool_execution_events"][0]["phase"] == "unavailable"
+
+
+def test_tool_runner_persists_large_tool_result_with_preview(tmp_path) -> None:
+    async def handler(args: dict[str, object]) -> str:
+        return "line\n" * 20
+
+    registry = ToolRegistry([ToolSpec(name="demo", description="demo", handler=handler)])
+    context = make_context(
+        {
+            "tool_result_max_chars": 20,
+            "tool_results_dir": str(tmp_path / "tool-results"),
+        }
+    )
+
+    result_messages = asyncio.run(
+        ToolRunner(registry).run(make_tool_message({"value": "original"}), context, make_cache())
+    )
+
+    tool_result = result_messages[0].payload["content"][0]
+    replacement = tool_result["content"]
+    persisted_path = tmp_path / "tool-results" / "tool-1.txt"
+    assert tool_result["is_error"] is False
+    assert persisted_path.read_text(encoding="utf-8") == "line\n" * 20
+    assert replacement.startswith("<persisted-output>")
+    assert f"Full output saved to: {persisted_path}" in replacement
+    assert "Preview (first" in replacement
+    assert context.content_replacement_state.replacements["tool-1"] == replacement

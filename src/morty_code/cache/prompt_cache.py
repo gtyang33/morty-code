@@ -35,6 +35,7 @@ class PromptCachePlanner:
         use_global_scope: bool = True,
         cache_ttl: str | None = None,
     ) -> None:
+        """初始化对象状态。"""
         self.enable_prompt_caching = enable_prompt_caching
         self.use_global_scope = use_global_scope
         self.cache_ttl = cache_ttl
@@ -46,6 +47,7 @@ class PromptCachePlanner:
         tool_schemas: list[dict[str, object]],
         skip_cache_write: bool = False,
     ) -> dict[str, object]:
+        """处理该方法负责的业务逻辑。"""
         cache_control = get_cache_control(ttl=self.cache_ttl)
         system_blocks = build_system_prompt_blocks(
             system_prompt,
@@ -89,6 +91,7 @@ class PromptCacheBreakDetector:
         model: str,
         messages: list[dict[str, object]],
     ) -> dict[str, object] | None:
+        """记录运行状态或诊断事件。"""
         state.call_count += 1
         current = {
             "system": _stable_hash(_strip_cache_control(system_blocks)),
@@ -123,6 +126,7 @@ class PromptCacheBreakDetector:
 
 
 def get_cache_control(ttl: str | None = None, scope: str | None = None) -> dict[str, str]:
+    """获取运行所需数据。"""
     control = {"type": "ephemeral"}
     if ttl == "1h":
         control["ttl"] = "1h"
@@ -164,6 +168,7 @@ def build_system_prompt_blocks(
     use_global_scope: bool = True,
     cache_control: dict[str, str] | None = None,
 ) -> list[dict[str, object]]:
+    """构建后续流程需要的数据。"""
     blocks: list[dict[str, object]] = []
     for block in split_system_prompt_prefix(system_prompt, use_global_scope=use_global_scope):
         rendered: dict[str, object] = {"type": "text", "text": block.text}
@@ -226,6 +231,7 @@ def extract_cache_usage(payload: dict[str, object]) -> dict[str, int]:
 
 
 def _add_cache_control_to_message(message: dict[str, object], cache_control: dict[str, str]) -> None:
+    """内部处理该方法负责的业务逻辑。"""
     content = message.get("content")
     if isinstance(content, str):
         message["content"] = [{"type": "text", "text": content, "cache_control": dict(cache_control)}]
@@ -245,6 +251,7 @@ def _add_cache_control_to_message(message: dict[str, object], cache_control: dic
 
 
 def _add_cache_references_to_tool_results(message: dict[str, object]) -> None:
+    """内部处理该方法负责的业务逻辑。"""
     if message.get("role") != "user":
         return
     content = message.get("content")
@@ -261,6 +268,7 @@ def _add_cache_references_to_tool_results(message: dict[str, object]) -> None:
 
 
 def _strip_cache_control(items: list[dict[str, object]]) -> list[dict[str, object]]:
+    """内部处理该方法负责的业务逻辑。"""
     stripped: list[dict[str, object]] = []
     for item in items:
         copied = dict(item)
@@ -270,6 +278,7 @@ def _strip_cache_control(items: list[dict[str, object]]) -> list[dict[str, objec
 
 
 def _collect_cache_controls(*groups: list[dict[str, object]]) -> list[object]:
+    """内部收集当前阶段需要的上下文。"""
     controls: list[object] = []
     for group in groups:
         for item in group:
@@ -286,11 +295,13 @@ def _collect_cache_controls(*groups: list[dict[str, object]]) -> list[object]:
 
 
 def _message_prefix(messages: list[dict[str, object]]) -> list[dict[str, object]]:
+    """内部处理该方法负责的业务逻辑。"""
     if len(messages) <= 1:
         return messages
     return messages[:-1]
 
 
 def _stable_hash(value: Any) -> str:
+    """内部处理该方法负责的业务逻辑。"""
     encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:16]

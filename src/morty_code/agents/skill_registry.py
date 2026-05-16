@@ -28,17 +28,21 @@ class SkillRegistry:
     """轻量 capability registry。"""
 
     def __init__(self, capabilities: list[CapabilitySpec] | None = None) -> None:
+        """初始化对象状态。"""
         self._capabilities: dict[str, CapabilitySpec] = {}
         for capability in capabilities or []:
             self.register(capability)
 
     def register(self, capability: CapabilitySpec) -> None:
+        """注册可供后续使用的条目。"""
         self._capabilities[capability.name] = capability
 
     def find(self, name: str) -> CapabilitySpec | None:
+        """查找匹配的注册项或数据。"""
         return self._capabilities.get(name)
 
     def list_user_invocable(self) -> list[CapabilitySpec]:
+        """列出可用条目。"""
         return [
             capability
             for capability in self._capabilities.values()
@@ -46,6 +50,7 @@ class SkillRegistry:
         ]
 
     def list_model_invocable(self) -> list[CapabilitySpec]:
+        """列出可用条目。"""
         return [
             capability
             for capability in self._capabilities.values()

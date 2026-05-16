@@ -14,6 +14,7 @@ class CompactAgent:
     """
 
     async def summarize(self, messages: list[Message], trigger: str = "auto") -> list[Message]:
+        """压缩并总结上下文内容。"""
         summary = _build_structured_summary(messages)
         now = datetime.utcnow().isoformat()
         return [
@@ -53,6 +54,7 @@ class CompactAgent:
         messages: list[Message],
         trigger: str = "auto",
     ) -> tuple[list[Message], list[Message]]:
+        """处理该方法负责的业务逻辑。"""
         summary_messages = await self.summarize(messages, trigger=trigger)
         # 保留尾部最近消息，作为 compact 后可继续执行的 retained tail。
         return summary_messages, _select_pair_safe_tail(messages, limit=8)
@@ -97,6 +99,7 @@ def _build_structured_summary(messages: list[Message]) -> str:
 
 
 def _extract_user_visible_text(content: object) -> list[str]:
+    """内部提取后续流程需要的信息。"""
     if isinstance(content, str):
         return [content.strip()] if content.strip() else []
     if not isinstance(content, list):
@@ -111,6 +114,7 @@ def _extract_user_visible_text(content: object) -> list[str]:
 
 
 def _extract_assistant_text(content: object) -> list[str]:
+    """内部提取后续流程需要的信息。"""
     if isinstance(content, str):
         return [content.strip()] if content.strip() else []
     if not isinstance(content, list):
@@ -125,6 +129,7 @@ def _extract_assistant_text(content: object) -> list[str]:
 
 
 def _extract_tool_uses(content: object) -> list[str]:
+    """内部提取后续流程需要的信息。"""
     if not isinstance(content, list):
         return []
     calls: list[str] = []
@@ -138,6 +143,7 @@ def _extract_tool_uses(content: object) -> list[str]:
 
 
 def _extract_tool_results(content: object) -> list[str]:
+    """内部提取后续流程需要的信息。"""
     if not isinstance(content, list):
         return []
     results: list[str] = []
@@ -153,6 +159,7 @@ def _extract_tool_results(content: object) -> list[str]:
 
 
 def _stringify_content(content: object) -> str:
+    """内部处理该方法负责的业务逻辑。"""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -167,6 +174,7 @@ def _stringify_content(content: object) -> str:
 
 
 def _truncate(text: str, max_chars: int) -> str:
+    """内部处理该方法负责的业务逻辑。"""
     text = " ".join(text.split())
     if len(text) <= max_chars:
         return text
@@ -190,6 +198,7 @@ def _select_pair_safe_tail(messages: list[Message], limit: int) -> list[Message]
 
 
 def _is_tool_result_only_user(message: Message) -> bool:
+    """内部判断当前对象是否满足条件。"""
     if message.type != "user":
         return False
     content = message.payload.get("content")

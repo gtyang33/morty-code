@@ -20,7 +20,9 @@ class ModelClient(Protocol):
         system_prompt: list[str],
         user_context: dict[str, str],
         system_context: dict[str, str],
-    ) -> Message: ...
+    ) -> Message:
+        """处理该方法负责的业务逻辑。"""
+        ...
 
 
 class EchoModelClient:
@@ -33,6 +35,7 @@ class EchoModelClient:
         user_context: dict[str, str],
         system_context: dict[str, str],
     ) -> Message:
+        """处理该方法负责的业务逻辑。"""
         last_user = next(
             (message for message in reversed(messages) if message["role"] == "user"),
             None,
@@ -70,6 +73,7 @@ class OpenAICompatibleModelClient:
         api_key: str | None = None,
         timeout: float | None = None,
     ) -> None:
+        """初始化对象状态。"""
         self.model = model
         self.base_url = (base_url or os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
@@ -89,6 +93,7 @@ class OpenAICompatibleModelClient:
         user_context: dict[str, str],
         system_context: dict[str, str],
     ) -> Message:
+        """处理该方法负责的业务逻辑。"""
         if not self.api_key:
             raise RuntimeError("OPENAI_API_KEY is required for openai-compatible provider")
         # runtime 内部用 Anthropic-like content block；这里统一转换成
@@ -162,6 +167,7 @@ class OpenAICompatibleModelClient:
         wire_messages: list[dict[str, object]],
         system_context: dict[str, str],
     ) -> dict[str, object]:
+        """内部构建后续流程需要的数据。"""
         body: dict[str, object] = {
             "model": model,
             "messages": wire_messages,
@@ -173,6 +179,7 @@ class OpenAICompatibleModelClient:
         return body
 
     def _message_from_choice(self, choice: dict[str, object]) -> Message:
+        """内部处理该方法负责的业务逻辑。"""
         content = choice.get("content") or ""
         tool_calls = choice.get("tool_calls") or []
         blocks: list[dict[str, object]] = []
@@ -269,17 +276,20 @@ class OpenAICompatibleModelClient:
         return normalized
 
     def _is_tool_result_blocks(self, content: list[object]) -> bool:
+        """内部判断当前对象是否满足条件。"""
         return bool(content) and all(
             isinstance(block, dict) and block.get("type") == "tool_result"
             for block in content
         )
 
     def _stringify_tool_result(self, content: object) -> str:
+        """内部处理该方法负责的业务逻辑。"""
         if isinstance(content, str):
             return content
         return json.dumps(content, ensure_ascii=False)
 
     def _stringify_content_blocks(self, content: list[object]) -> str:
+        """内部处理该方法负责的业务逻辑。"""
         parts: list[str] = []
         for block in content:
             if isinstance(block, dict) and block.get("type") == "text":
@@ -289,6 +299,7 @@ class OpenAICompatibleModelClient:
         return "\n".join(part for part in parts if part).strip()
 
     def _to_openai_user_parts(self, content: list[object]) -> list[dict[str, object]]:
+        """内部转换为目标数据结构。"""
         parts: list[dict[str, object]] = []
         for block in content:
             if not isinstance(block, dict):
@@ -317,6 +328,7 @@ class OpenAICompatibleModelClient:
         user_context: dict[str, str],
         system_context: dict[str, str],
     ) -> str:
+        """内部渲染面向用户或模型的文本。"""
         parts = ["\n\n".join(system_prompt)]
         if user_context:
             parts.append("User context:\n" + json.dumps(user_context, ensure_ascii=False, indent=2))
@@ -331,6 +343,7 @@ class OpenAICompatibleModelClient:
         return "\n\n".join(part for part in parts if part.strip())
 
     def _strip_cache_fields(self, value: object) -> object:
+        """内部处理该方法负责的业务逻辑。"""
         if isinstance(value, list):
             return [self._strip_cache_fields(item) for item in value]
         if isinstance(value, dict):
@@ -343,6 +356,7 @@ class OpenAICompatibleModelClient:
 
 
 def _parse_retry_after(value: str | None) -> float | None:
+    """内部解析输入文本或结构化数据。"""
     if not value:
         return None
     try:
@@ -352,6 +366,7 @@ def _parse_retry_after(value: str | None) -> float | None:
 
 
 def _env_float(*names: str, default: float) -> float:
+    """内部处理该方法负责的业务逻辑。"""
     for name in names:
         raw = os.environ.get(name)
         if raw is None or not raw.strip():

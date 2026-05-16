@@ -71,6 +71,7 @@ def _handle_control_request(
     tool_context: ToolUseContext,
     stdout: TextIO,
 ) -> None:
+    """内部处理该方法负责的业务逻辑。"""
     request_id = str(event.get("request_id") or uuid4())
     request = event.get("request")
     if not isinstance(request, dict):
@@ -133,6 +134,7 @@ def _request_tool_permission(
     stdin: TextIO,
     stdout: TextIO,
 ) -> dict[str, object]:
+    """内部处理该方法负责的业务逻辑。"""
     request_id = str(uuid4())
     _write_event(
         stdout,
@@ -193,6 +195,7 @@ def _request_tool_permission(
 
 
 def _extract_user_text(event: dict[str, object]) -> str:
+    """内部提取后续流程需要的信息。"""
     message = event.get("message")
     if isinstance(message, dict):
         content = message.get("content")
@@ -212,6 +215,7 @@ def _extract_user_text(event: dict[str, object]) -> str:
 
 
 def _initialized_event(tool_context: ToolUseContext) -> dict[str, object]:
+    """内部处理该方法负责的业务逻辑。"""
     return {
         "type": "system",
         "subtype": "harness_initialized",
@@ -227,6 +231,7 @@ def _write_control_success(
     request_id: str,
     response: dict[str, object] | None = None,
 ) -> None:
+    """内部写入持久化内容。"""
     payload: dict[str, object] = {
         "type": "control_response",
         "response": {
@@ -240,6 +245,7 @@ def _write_control_success(
 
 
 def _write_control_error(stdout: TextIO, request_id: str, error: str) -> None:
+    """内部写入持久化内容。"""
     _write_event(
         stdout,
         {
@@ -254,9 +260,11 @@ def _write_control_error(stdout: TextIO, request_id: str, error: str) -> None:
 
 
 def _write_event(stdout: TextIO, event: dict[str, object]) -> None:
+    """内部写入持久化内容。"""
     stdout.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
     stdout.flush()
 
 
 def _session_id(tool_context: ToolUseContext) -> str:
+    """内部处理该方法负责的业务逻辑。"""
     return str(tool_context.app_state.get("session_id") or "default")

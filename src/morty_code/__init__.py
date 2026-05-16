@@ -54,6 +54,7 @@ _SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇"
 
 
 def _env_list(name: str) -> list[str]:
+    """内部处理该方法负责的业务逻辑。"""
     raw = os.environ.get(name, "")
     return [item.strip() for item in raw.split(",") if item.strip()]
 
@@ -87,6 +88,7 @@ def _runtime_app_state(
     permission_settings,
     tool_registry,
 ) -> dict[str, object]:
+    """内部执行核心流程。"""
     morty_dir = workspace_root / ".morty"
     return {
         "cwd": str(workspace_root),
@@ -115,9 +117,11 @@ class _ReplLexer(Lexer):
     """简单 lexer：/command 高亮，其余为普通文本。"""
 
     def lex_document(self, document):
+        """处理该方法负责的业务逻辑。"""
         lines = document.lines
 
         def get_line(lineno):
+            """获取运行所需数据。"""
             line = lines[lineno]
             if not line:
                 return [("", "")]
@@ -139,17 +143,20 @@ class _Spinner:
     """在 stderr 上显示旋转动画，用于模型响应等待期间。"""
 
     def __init__(self, frames=None, interval=0.12):
+        """初始化对象状态。"""
         self.frames = frames or _SPINNER_FRAMES
         self.interval = interval
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
     def start(self, text: str = "thinking"):
+        """启动后台或交互流程。"""
         if self._thread is not None:
             return
         self._stop.clear()
 
         def _spin():
+            """内部处理该方法负责的业务逻辑。"""
             idx = 0
             while not self._stop.is_set():
                 frame = self.frames[idx % len(self.frames)]
@@ -164,6 +171,7 @@ class _Spinner:
         self._thread.start()
 
     def stop(self):
+        """停止后台或交互流程。"""
         self._stop.set()
         if self._thread is not None:
             self._thread.join()
@@ -363,9 +371,11 @@ def main() -> None:
 def _make_live_printer(
     spinner: _Spinner | None = None,
 ) -> tuple[Callable[[list[Message]], None], set[str]]:
+    """内部创建流程需要的辅助对象。"""
     printed_ids: set[str] = set()
 
     def _print(messages: list[Message]) -> None:
+        """内部处理该方法负责的业务逻辑。"""
         if spinner is not None:
             spinner.stop()
         for message in messages:
@@ -378,12 +388,14 @@ def _make_live_printer(
 
 
 def _print_cli_message(message: Message) -> None:
+    """内部处理该方法负责的业务逻辑。"""
     rendered = _render_cli_message(message)
     if rendered:
         print(rendered)
 
 
 def _print_restored_cli_message(message: Message) -> None:
+    """内部处理该方法负责的业务逻辑。"""
     rendered = _render_restored_cli_message(message)
     if rendered:
         print(rendered)
@@ -428,6 +440,7 @@ def _render_cli_message(message: Message) -> str:
 
 
 def _render_restored_cli_message(message: Message) -> str:
+    """内部渲染面向用户或模型的文本。"""
     if message.type != "user":
         return _render_cli_message(message)
     content = message.payload.get("content")
@@ -438,6 +451,7 @@ def _render_restored_cli_message(message: Message) -> str:
 
 
 def _render_content(content: object, *, verbose: bool = False) -> str:
+    """内部渲染面向用户或模型的文本。"""
     if isinstance(content, str):
         return content
     if not isinstance(content, list):
@@ -461,6 +475,7 @@ def _render_content(content: object, *, verbose: bool = False) -> str:
 
 
 def _is_tool_result_content(content: object) -> bool:
+    """内部判断当前对象是否满足条件。"""
     if not isinstance(content, list) or not content:
         return False
     return all(isinstance(block, dict) and block.get("type") == "tool_result"
@@ -468,6 +483,7 @@ def _is_tool_result_content(content: object) -> bool:
 
 
 def _render_tool_use(block: dict[str, object]) -> str:
+    """内部渲染面向用户或模型的文本。"""
     name = str(block.get("name") or "unknown")
     tool_input = block.get("input")
     summary = _summarize_tool_input(name, tool_input)
@@ -475,6 +491,7 @@ def _render_tool_use(block: dict[str, object]) -> str:
 
 
 def _summarize_tool_input(name: str, tool_input: object) -> str:
+    """内部压缩并总结上下文内容。"""
     if not isinstance(tool_input, dict):
         return ""
     if name in {"read_file", "list_dir", "file_info"}:
@@ -496,6 +513,7 @@ def _summarize_tool_input(name: str, tool_input: object) -> str:
 
 
 def _render_tool_results(content: object, *, verbose: bool) -> str:
+    """内部渲染面向用户或模型的文本。"""
     if not isinstance(content, list):
         return ""
     return "\n".join(
@@ -509,6 +527,7 @@ def _render_tool_results(content: object, *, verbose: bool) -> str:
 
 
 def _render_single_tool_result(block: dict[str, object], *, verbose: bool) -> str:
+    """内部渲染面向用户或模型的文本。"""
     status = "error" if block.get("is_error") else "ok"
     if verbose:
         return (
@@ -519,6 +538,7 @@ def _render_single_tool_result(block: dict[str, object], *, verbose: bool) -> st
 
 
 def _summarize_tool_result(content: object) -> str:
+    """内部压缩并总结上下文内容。"""
     parsed = _parse_tool_result_payload(content)
     if isinstance(parsed, dict):
         if "entries" in parsed and "path" in parsed:
@@ -551,6 +571,7 @@ def _summarize_tool_result(content: object) -> str:
 
 
 def _parse_tool_result_payload(content: object) -> object:
+    """内部解析输入文本或结构化数据。"""
     if isinstance(content, list):
         text_parts = [
             str(block.get("text", ""))
@@ -570,6 +591,7 @@ def _parse_tool_result_payload(content: object) -> object:
 
 
 def _truncate_text(text: str, limit: int) -> str:
+    """内部处理该方法负责的业务逻辑。"""
     collapsed = " ".join(text.split())
     if len(collapsed) <= limit:
         return collapsed
@@ -577,4 +599,5 @@ def _truncate_text(text: str, limit: int) -> str:
 
 
 def _json_fallback(value: object) -> str:
+    """内部处理该方法负责的业务逻辑。"""
     return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)

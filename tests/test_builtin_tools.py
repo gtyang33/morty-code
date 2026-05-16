@@ -112,6 +112,19 @@ def test_multi_edit_rejects_ambiguous_replacement(tmp_path) -> None:
         )
 
 
+def test_append_file_supports_chunked_document_writes(tmp_path) -> None:
+    context = make_context()
+
+    first = run_tool(tmp_path, "append_file", {"path": "docs/report.md", "content": "# Title\n"}, context)
+    second = run_tool(tmp_path, "append_file", {"path": "docs/report.md", "content": "body\n"}, context)
+
+    path = tmp_path / "docs/report.md"
+    assert first["operation"] == "create"
+    assert second["operation"] == "append"
+    assert path.read_text(encoding="utf-8") == "# Title\nbody\n"
+    assert str(path) in context.read_file_state
+
+
 def test_new_write_tools_respect_security_guards(tmp_path) -> None:
     (tmp_path / "safe.txt").write_text("x", encoding="utf-8")
 

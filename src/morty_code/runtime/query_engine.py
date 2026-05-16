@@ -37,6 +37,7 @@ class QueryEngine:
         memory_extractor: MemoryExtractor | None = None,
         memory_write_char_threshold: int = 12000,
     ) -> None:
+        """初始化对象状态。"""
         self.prompt_builder = prompt_builder
         self.input_dispatcher = input_dispatcher
         self.input_processor = input_processor
@@ -63,6 +64,7 @@ class QueryEngine:
         # 输入层可能把一条用户输入拆成多条队列命令：普通 prompt、slash
         # command、由 slash command 生成的 follow-up prompt 都走同一条管线。
         # 这样 transcript 中看到的是统一消息流，而不是多个旁路入口。
+        """提交用户输入并驱动一次处理。"""
         queued_commands = await self.input_dispatcher.submit(
             raw_input=raw_input,
             mode="prompt",
@@ -218,6 +220,7 @@ class QueryEngine:
         pasted_contents: dict[int, dict[str, object]] | None = None,
         on_new_messages: Callable[[list[Message]], None] | None = None,
     ) -> list[Message]:
+        """提交用户输入并驱动一次处理。"""
         return asyncio.run(
             self.submit_message(
                 raw_input,
@@ -228,6 +231,7 @@ class QueryEngine:
         )
 
     async def restore_from_transcript(self, metadata: dict[str, object] | None = None) -> dict[str, object]:
+        """从历史记录恢复运行状态。"""
         loaded = await self.transcript_store.load_session()
         recovered_messages = self.recovery.recover(loaded.messages)
         restored = self.session_restore.restore(
@@ -248,6 +252,7 @@ class QueryEngine:
         force: bool = False,
         trigger: str = "auto",
     ) -> list[Message]:
+        """内部按条件执行可选处理。"""
         approximate_tokens = sum(len(str(message.payload)) for message in self.messages)
         if not force and not self.auto_compact_decider.should_compact(approximate_tokens):
             return []
@@ -285,6 +290,7 @@ class QueryEngine:
             return []
 
     def _write_memories(self, tool_context: ToolUseContext, new_messages: list[Message]) -> None:
+        """内部写入持久化内容。"""
         candidates = self.memory_extractor.extract(new_messages)
         self._route_memory_candidates(tool_context, candidates)
 
@@ -293,6 +299,7 @@ class QueryEngine:
         tool_context: ToolUseContext,
         new_messages: list[Message],
     ) -> None:
+        """内部写入持久化内容。"""
         extracted = self.memory_extractor.extract(new_messages)
         candidates = await extracted if inspect.isawaitable(extracted) else extracted
         self._route_memory_candidates(tool_context, candidates)
@@ -302,6 +309,7 @@ class QueryEngine:
         tool_context: ToolUseContext,
         candidates,
     ) -> None:
+        """内部处理该方法负责的业务逻辑。"""
         if not candidates:
             return
         if tool_context.session_memory_path:
@@ -315,7 +323,10 @@ class QueryEngine:
                 if candidate.target == "durable":
                     durable_store.append_summary(
                         candidate.text,
-                        memory_type=self._durable_memory_type(candidate.topic),
+                        memory_type=(
+                            candidate.memory_type
+                            or self._durable_memory_type(candidate.topic)
+                        ),
                     )
 
     def _maybe_write_memories(
@@ -325,6 +336,7 @@ class QueryEngine:
         *,
         raw_input: str,
     ) -> bool:
+        """内部按条件执行可选处理。"""
         if not self._should_write_memories(raw_input):
             return False
         self._write_memories(tool_context, new_messages)
@@ -337,26 +349,31 @@ class QueryEngine:
         *,
         raw_input: str,
     ) -> bool:
+        """内部按条件执行可选处理。"""
         if not self._should_write_memories(raw_input):
             return False
         await self._write_memories_async(tool_context, new_messages)
         return True
 
     def _should_write_memories(self, raw_input: str) -> bool:
+        """内部判断是否需要执行后续动作。"""
         if self._is_explicit_memory_request(raw_input):
             return True
         return self._approximate_message_chars(self.messages) >= self.memory_write_char_threshold
 
     def _is_explicit_memory_request(self, raw_input: str) -> bool:
+        """内部判断当前对象是否满足条件。"""
         normalized = raw_input.strip().lower()
         if normalized.startswith("/memory"):
             return True
         return any(marker in normalized for marker in ("remember this", "记住", "以后记住"))
 
     def _approximate_message_chars(self, messages: list[Message]) -> int:
+        """内部处理该方法负责的业务逻辑。"""
         return sum(len(str(message.payload)) for message in messages)
 
     def _durable_memory_type(self, topic: str) -> str:
+        """内部处理该方法负责的业务逻辑。"""
         return {
             "preference": "user",
             "constraint": "project",
@@ -368,6 +385,7 @@ class QueryEngine:
         }.get(topic, "project")
 
     def _messages_after_compact_boundary(self) -> list[Message]:
+        """内部处理该方法负责的业务逻辑。"""
         for index in range(len(self.messages) - 1, -1, -1):
             message = self.messages[index]
             if message.type == "system" and message.payload.get("subtype") == "compact_boundary":
@@ -375,6 +393,7 @@ class QueryEngine:
         return self.messages
 
     def _assistant_error_message(self, content: str) -> Message:
+        """内部处理该方法负责的业务逻辑。"""
         return Message(
             uuid=str(uuid4()),
             timestamp=datetime.utcnow().isoformat(),

@@ -23,6 +23,7 @@ def register_task_output_tool(registry: ToolRegistry) -> None:
         context: ToolUseContext,
         _cache_safe: CacheSafeParams,
     ) -> dict[str, object]:
+        """处理该方法负责的业务逻辑。"""
         task_id = str(args.get("task_id") or "").strip()
         if not task_id:
             raise ValueError("task_id is required")
@@ -79,6 +80,7 @@ def register_task_output_tool(registry: ToolRegistry) -> None:
 
 
 async def _wait_for_task(task_registry, task_id: str, timeout_ms: int) -> SubagentTask | None:
+    """内部处理该方法负责的业务逻辑。"""
     deadline = asyncio.get_running_loop().time() + (timeout_ms / 1000)
     while True:
         task = task_registry.get(task_id)
@@ -90,6 +92,7 @@ async def _wait_for_task(task_registry, task_id: str, timeout_ms: int) -> Subage
 
 
 def _format_task(task: SubagentTask, retrieval_status: str) -> dict[str, object]:
+    """内部格式化输出内容。"""
     payload = asdict(task)
     return {
         "retrieval_status": retrieval_status,
@@ -98,6 +101,7 @@ def _format_task(task: SubagentTask, retrieval_status: str) -> dict[str, object]
 
 
 def _status_for(task: SubagentTask) -> str:
+    """内部处理该方法负责的业务逻辑。"""
     if task.status == "running":
         return "not_ready"
     if task.status == "interrupted":
@@ -106,6 +110,7 @@ def _status_for(task: SubagentTask) -> str:
 
 
 def _bounded_timeout(value: object) -> int:
+    """内部处理该方法负责的业务逻辑。"""
     if value is None or value == "":
         return 30000
     try:

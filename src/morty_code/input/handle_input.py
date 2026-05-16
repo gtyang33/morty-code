@@ -16,6 +16,7 @@ class InputDispatcher:
         mode: str,
         pasted_contents: dict[int, dict[str, object]] | None = None,
     ) -> list[QueuedCommand]:
+        """提交用户输入并驱动一次处理。"""
         return self.submit_sync(raw_input, mode, pasted_contents)
 
     def submit_sync(
@@ -24,6 +25,7 @@ class InputDispatcher:
         mode: str,
         pasted_contents: dict[int, dict[str, object]] | None = None,
     ) -> list[QueuedCommand]:
+        """提交用户输入并驱动一次处理。"""
         pasted_contents = pasted_contents or {}
         referenced_ids = {int(ref["id"]) for ref in parse_references(raw_input)}
         filtered = {

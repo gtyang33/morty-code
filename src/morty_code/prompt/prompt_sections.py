@@ -21,12 +21,14 @@ class PromptSectionRegistry:
     """管理可缓存 section，与动态 section 的边界。"""
 
     def __init__(self) -> None:
+        """初始化对象状态。"""
         self._cache: dict[str, str | None] = {}
 
     async def resolve_sections(
         self,
         sections: list[SystemPromptSection],
     ) -> list[str]:
+        """解析名称或路径到具体对象。"""
         resolved: list[str] = []
         for section in sections:
             if not section.cache_break and section.name in self._cache:

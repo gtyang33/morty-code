@@ -18,11 +18,13 @@ class NormalizationReport:
     repairs: dict[str, int] = field(default_factory=dict)
 
     def record(self, repair_type: str, count: int = 1) -> None:
+        """记录运行状态或诊断事件。"""
         if count <= 0:
             return
         self.repairs[repair_type] = self.repairs.get(repair_type, 0) + count
 
     def to_event(self) -> dict[str, object] | None:
+        """转换为目标数据结构。"""
         if not self.repairs:
             return None
         return {
@@ -42,6 +44,7 @@ class MessageNormalizer:
     """
 
     def __init__(self, max_images: int = 20) -> None:
+        """初始化对象状态。"""
         self.max_images = max_images
         self.last_report = NormalizationReport()
 
@@ -50,6 +53,7 @@ class MessageNormalizer:
         messages: list[Message],
         available_tools: list[str],
     ) -> list[dict[str, object]]:
+        """规范化消息结构。"""
         self.last_report = NormalizationReport()
         reordered = self._reorder_attachments(messages)
         materialized = [self._materialize_attachment(message) for message in reordered]
@@ -72,6 +76,7 @@ class MessageNormalizer:
         return self._final_validate_api_messages(api_messages)
 
     def _reorder_attachments(self, messages: list[Message]) -> list[Message]:
+        """内部处理该方法负责的业务逻辑。"""
         result: list[Message] = []
         pending_attachments: list[Message] = []
         for message in reversed(messages):
@@ -88,6 +93,7 @@ class MessageNormalizer:
         return result
 
     def _is_tool_result_user(self, message: Message) -> bool:
+        """内部判断当前对象是否满足条件。"""
         if message.type != "user":
             return False
         content = message.payload.get("content")
@@ -99,6 +105,7 @@ class MessageNormalizer:
         )
 
     def _merge_adjacent_users(self, messages: list[Message]) -> list[Message]:
+        """内部合并相邻或相关的数据块。"""
         merged: list[Message] = []
         for message in messages:
             if merged and message.type == "user" and merged[-1].type == "user":
@@ -116,6 +123,7 @@ class MessageNormalizer:
         return merged
 
     def _merge_user_content(self, left: object, right: object) -> object:
+        """内部合并相邻或相关的数据块。"""
         if isinstance(left, str) and isinstance(right, str):
             return f"{left}\n{right}".strip()
         if isinstance(left, list) and isinstance(right, list):
@@ -131,17 +139,20 @@ class MessageNormalizer:
         return f"{left}\n{right}".strip()
 
     def _text_blocks_from_string(self, value: str) -> list[dict[str, object]]:
+        """内部处理该方法负责的业务逻辑。"""
         stripped = value.strip()
         if not stripped:
             return []
         return [{"type": "text", "text": stripped}]
 
     def _to_api_message(self, message: Message) -> dict[str, object]:
+        """内部转换为目标数据结构。"""
         if message.type == "user":
             return {"role": "user", "content": message.payload.get("content", "")}
         return {"role": "assistant", "content": message.payload.get("content", [])}
 
     def _normalize_message_content(self, message: Message) -> Message:
+        """内部规范化消息结构。"""
         if message.type == "user":
             return self._normalize_user_content(message)
         if message.type != "assistant":
@@ -161,6 +172,7 @@ class MessageNormalizer:
         return normalized
 
     def _normalize_user_content(self, message: Message) -> Message:
+        """内部规范化消息结构。"""
         content = message.payload.get("content")
         if not isinstance(content, list):
             return message
@@ -186,6 +198,7 @@ class MessageNormalizer:
         return normalized
 
     def _normalize_tool_result_block(self, block: dict[str, object]) -> dict[str, object]:
+        """内部规范化消息结构。"""
         updated = dict(block)
         content = updated.get("content")
         if isinstance(content, list):
@@ -210,12 +223,14 @@ class MessageNormalizer:
         return updated
 
     def _hoist_tool_results(self, blocks: list[dict[str, object]]) -> list[dict[str, object]]:
+        """内部处理该方法负责的业务逻辑。"""
         return [
             *[block for block in blocks if block.get("type") == "tool_result"],
             *[block for block in blocks if block.get("type") != "tool_result"],
         ]
 
     def _has_api_visible_content(self, message: Message) -> bool:
+        """内部判断当前对象是否包含目标内容。"""
         if message.type == "assistant":
             content = message.payload.get("content")
             if isinstance(content, str):
@@ -240,6 +255,7 @@ class MessageNormalizer:
         return True
 
     def _materialize_attachment(self, message: Message) -> Message:
+        """内部处理该方法负责的业务逻辑。"""
         if message.type != "attachment":
             return message
         attachment_type = str(message.payload.get("attachment_type", "unknown"))
@@ -255,6 +271,7 @@ class MessageNormalizer:
         )
 
     def _format_attachment_content(self, payload: dict[str, object]) -> str:
+        """内部格式化输出内容。"""
         attachment_type = str(payload.get("attachment_type", "unknown"))
         if attachment_type == "at_mentioned_file":
             path = payload.get("path", "")
@@ -298,6 +315,7 @@ class MessageNormalizer:
         return "\n".join(f"{key}: {value}" for key, value in payload.items())
 
     def _smoosh_system_reminder_siblings(self, messages: list[Message]) -> list[Message]:
+        """内部处理该方法负责的业务逻辑。"""
         output: list[Message] = []
         for message in messages:
             content = message.payload.get("content")
@@ -352,6 +370,7 @@ class MessageNormalizer:
         return output
 
     def _tool_result_has_reference(self, block: dict[str, object]) -> bool:
+        """内部处理该方法负责的业务逻辑。"""
         content = block.get("content")
         return isinstance(content, list) and any(
             isinstance(item, dict) and item.get("type") == "tool_reference"
@@ -363,6 +382,7 @@ class MessageNormalizer:
         tool_result: dict[str, object],
         blocks: list[dict[str, object]],
     ) -> dict[str, object]:
+        """内部追加运行过程产生的数据。"""
         incoming_text = "\n\n".join(
             str(block.get("text", "")).strip()
             for block in blocks
@@ -382,6 +402,7 @@ class MessageNormalizer:
         return updated
 
     def _join_text_content(self, content: object, extra: str) -> str:
+        """内部处理该方法负责的业务逻辑。"""
         base = ""
         if isinstance(content, str):
             base = content.strip()
@@ -521,6 +542,7 @@ class MessageNormalizer:
         content: list[object],
         allowed_ids: set[str],
     ) -> list[object]:
+        """内部过滤不应继续传递的数据。"""
         filtered: list[object] = []
         seen_result_ids: set[str] = set()
         stripped_count = 0
@@ -564,6 +586,7 @@ class MessageNormalizer:
         return output
 
     def _merge_assistant_messages(self, left: Message, right: Message) -> Message:
+        """内部合并相邻或相关的数据块。"""
         left_content = left.payload.get("content")
         right_content = right.payload.get("content")
         if not isinstance(left_content, list):
@@ -573,6 +596,7 @@ class MessageNormalizer:
         return self._with_content(left, [*left_content, *right_content])
 
     def _filter_orphaned_thinking_only_assistants(self, messages: list[Message]) -> list[Message]:
+        """内部过滤不应继续传递的数据。"""
         ids_with_non_thinking: set[str] = set()
         for message in messages:
             if message.type != "assistant":
@@ -608,6 +632,7 @@ class MessageNormalizer:
         return output
 
     def _filter_trailing_thinking_from_last_assistant(self, messages: list[Message]) -> list[Message]:
+        """内部过滤不应继续传递的数据。"""
         if not messages or messages[-1].type != "assistant":
             return messages
         content = messages[-1].payload.get("content")
@@ -633,6 +658,7 @@ class MessageNormalizer:
         return result
 
     def _filter_whitespace_only_assistants(self, messages: list[Message]) -> list[Message]:
+        """内部过滤不应继续传递的数据。"""
         output: list[Message] = []
         removed = 0
         for message in messages:
@@ -658,6 +684,7 @@ class MessageNormalizer:
         return messages
 
     def _strip_thinking_blocks(self, messages: list[Message]) -> list[Message]:
+        """内部处理该方法负责的业务逻辑。"""
         output: list[Message] = []
         for message in messages:
             if message.type != "assistant":
@@ -683,6 +710,7 @@ class MessageNormalizer:
         return output
 
     def _ensure_non_final_assistants_have_content(self, messages: list[Message]) -> list[Message]:
+        """内部确保依赖资源处于可用状态。"""
         output: list[Message] = []
         for index, message in enumerate(messages):
             if message.type != "assistant" or index == len(messages) - 1:
@@ -719,6 +747,7 @@ class MessageNormalizer:
         return output
 
     def _api_message_has_content(self, message: dict[str, object]) -> bool:
+        """内部处理该方法负责的业务逻辑。"""
         content = message.get("content")
         if isinstance(content, str):
             return bool(content.strip())
@@ -731,6 +760,7 @@ class MessageNormalizer:
         left: dict[str, object],
         right: dict[str, object],
     ) -> dict[str, object]:
+        """内部合并相邻或相关的数据块。"""
         if left.get("role") == "assistant":
             left_content = left.get("content")
             right_content = right.get("content")
@@ -742,6 +772,7 @@ class MessageNormalizer:
         return {**left, "content": self._merge_user_content(left.get("content"), right.get("content"))}
 
     def _with_content(self, message: Message, content: object) -> Message:
+        """内部处理该方法负责的业务逻辑。"""
         return Message(
             uuid=message.uuid,
             timestamp=message.timestamp,
@@ -753,6 +784,7 @@ class MessageNormalizer:
         )
 
     def _tool_use_ids(self, content: object) -> set[str]:
+        """内部处理该方法负责的业务逻辑。"""
         if not isinstance(content, list):
             return set()
         return {
@@ -762,6 +794,7 @@ class MessageNormalizer:
         }
 
     def _tool_result_ids(self, content: object) -> set[str]:
+        """内部处理该方法负责的业务逻辑。"""
         if not isinstance(content, list):
             return set()
         return {

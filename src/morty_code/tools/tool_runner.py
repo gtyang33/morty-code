@@ -6,6 +6,12 @@ from uuid import uuid4
 
 from morty_code.security import PermissionDecision, evaluate_tool_permission
 from morty_code.tools.schema_validation import ToolInputValidationError, validate_tool_input
+from morty_code.tools.tool_result_budget import (
+    DEFAULT_RESULT_BUDGET_CHARS,
+    ToolResultCandidate,
+    _content_size,
+    _persist_and_build_replacement,
+)
 from morty_code.tools.tool_registry import ToolRegistry
 from morty_code.types.messages import Message
 from morty_code.types.runtime_state import CacheSafeParams, ToolUseContext
@@ -20,6 +26,7 @@ class NullToolRunner:
         context: ToolUseContext,
         cache_safe: CacheSafeParams | None = None,
     ) -> list[Message]:
+        """执行核心流程。"""
         return []
 
 
@@ -31,6 +38,7 @@ class ToolRunner:
     """
 
     def __init__(self, registry: ToolRegistry) -> None:
+        """初始化对象状态。"""
         self.registry = registry
 
     async def run(
@@ -39,6 +47,7 @@ class ToolRunner:
         context: ToolUseContext,
         cache_safe: CacheSafeParams | None = None,
     ) -> list[Message]:
+        """执行核心流程。"""
         tool_uses = self._extract_tool_uses(assistant_message)
         results: list[dict[str, object]] = []
         for tool_use in tool_uses:
@@ -215,6 +224,7 @@ class ToolRunner:
         decision: PermissionDecision,
         context: ToolUseContext,
     ) -> PermissionDecision:
+        """内部处理该方法负责的业务逻辑。"""
         handler = context.app_state.get("permission_request_handler")
         if not callable(handler):
             return decision
@@ -247,6 +257,7 @@ class ToolRunner:
         )
 
     def _extract_tool_uses(self, assistant_message: Message) -> list[dict[str, object]]:
+        """内部提取后续流程需要的信息。"""
         content = assistant_message.payload.get("content", [])
         if not isinstance(content, list):
             return []
@@ -262,6 +273,7 @@ class ToolRunner:
         content: object,
         is_error: bool,
     ) -> dict[str, object]:
+        """内部处理该方法负责的业务逻辑。"""
         return {
             "type": "tool_result",
             "tool_use_id": tool_use.get("id", ""),
@@ -274,6 +286,7 @@ class ToolRunner:
         context: ToolUseContext,
         event: dict[str, object],
     ) -> None:
+        """内部记录运行状态或诊断事件。"""
         events = context.app_state.setdefault("tool_execution_events", [])
         if not isinstance(events, list):
             return
@@ -291,16 +304,25 @@ class ToolRunner:
         payload: object,
         context: ToolUseContext,
     ) -> object:
+        """内部按条件执行可选处理。"""
         tool_use_id = str(tool_use.get("id", ""))
-        max_chars = int(context.app_state.get("tool_result_max_chars", 12000))
-        serialized = str(payload)
-        if not tool_use_id or len(serialized) <= max_chars:
+        max_chars = int(context.app_state.get("tool_result_max_chars", DEFAULT_RESULT_BUDGET_CHARS))
+        if not tool_use_id:
             return payload
-        replacement = (
-            f"[Tool result {tool_use_id} was {len(serialized)} chars and was "
-            "replaced to keep prompt size stable.]"
+        existing = context.content_replacement_state.replacements.get(tool_use_id)
+        if existing is not None:
+            return existing
+        if _content_size(payload) <= max_chars:
+            return payload
+        replacement = _persist_and_build_replacement(
+            candidate=ToolResultCandidate(
+                tool_use_id=tool_use_id,
+                content=payload,
+                size=_content_size(payload),
+            ),
+            tool_results_dir=context.app_state.get("tool_results_dir", ".morty/tool-results"),
         )
-        # 只记录一次替换决策，resume/fork 可以复用相同 placeholder。
+        # 只记录一次替换决策，resume/fork 可以复用相同 persisted-output 文本。
         context.content_replacement_state.seen_ids.add(tool_use_id)
         context.content_replacement_state.replacements[tool_use_id] = replacement
         return replacement

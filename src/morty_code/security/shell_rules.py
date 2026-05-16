@@ -16,6 +16,7 @@ class ToolPermissionRule:
 
 
 def parse_tool_rule(rule: str) -> ToolPermissionRule:
+    """解析输入文本或结构化数据。"""
     text = rule.strip()
     open_index = _first_unescaped(text, "(")
     close_index = _last_unescaped(text, ")")
@@ -31,11 +32,13 @@ def parse_tool_rule(rule: str) -> ToolPermissionRule:
 
 
 def rule_matches_tool(rule: str, tool_name: str) -> bool:
+    """处理该方法负责的业务逻辑。"""
     parsed = parse_tool_rule(rule)
     return parsed.tool_name.lower() == tool_name.lower() and parsed.content is None
 
 
 def rule_matches_bash_command(rule: str, command: str) -> bool:
+    """处理该方法负责的业务逻辑。"""
     parsed = parse_tool_rule(rule)
     if parsed.tool_name.lower() != "bash" or parsed.content is None:
         return False
@@ -43,6 +46,7 @@ def rule_matches_bash_command(rule: str, command: str) -> bool:
 
 
 def shell_pattern_matches(pattern: str, command: str) -> bool:
+    """处理该方法负责的业务逻辑。"""
     normalized_pattern = pattern.strip()
     normalized_command = command.strip()
     if normalized_pattern.endswith(":*"):
@@ -54,6 +58,7 @@ def shell_pattern_matches(pattern: str, command: str) -> bool:
 
 
 def _wildcard_match(pattern: str, command: str) -> bool:
+    """内部处理该方法负责的业务逻辑。"""
     parts: list[str] = []
     index = 0
     while index < len(pattern):
@@ -74,6 +79,7 @@ def _wildcard_match(pattern: str, command: str) -> bool:
 
 
 def _has_unescaped_wildcard(pattern: str) -> bool:
+    """内部判断当前对象是否包含目标内容。"""
     if pattern.endswith(":*"):
         return False
     for index, char in enumerate(pattern):
@@ -90,6 +96,7 @@ def _has_unescaped_wildcard(pattern: str) -> bool:
 
 
 def _first_unescaped(text: str, char: str) -> int:
+    """内部处理该方法负责的业务逻辑。"""
     for index, current in enumerate(text):
         if current == char and not _is_escaped(text, index):
             return index
@@ -97,6 +104,7 @@ def _first_unescaped(text: str, char: str) -> int:
 
 
 def _last_unescaped(text: str, char: str) -> int:
+    """内部处理该方法负责的业务逻辑。"""
     for index in range(len(text) - 1, -1, -1):
         if text[index] == char and not _is_escaped(text, index):
             return index
@@ -104,6 +112,7 @@ def _last_unescaped(text: str, char: str) -> int:
 
 
 def _is_escaped(text: str, index: int) -> bool:
+    """内部判断当前对象是否满足条件。"""
     backslashes = 0
     cursor = index - 1
     while cursor >= 0 and text[cursor] == "\\":
@@ -113,8 +122,10 @@ def _is_escaped(text: str, index: int) -> bool:
 
 
 def _unescape_rule_content(content: str) -> str:
+    """内部处理该方法负责的业务逻辑。"""
     return content.replace(r"\(", "(").replace(r"\)", ")").replace(r"\\", "\\")
 
 
 def _unescape_shell_literal(pattern: str) -> str:
+    """内部处理该方法负责的业务逻辑。"""
     return pattern.replace(r"\*", "*").replace(r"\\", "\\")

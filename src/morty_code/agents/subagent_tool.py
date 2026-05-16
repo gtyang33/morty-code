@@ -23,6 +23,7 @@ def register_subagent_tool(query_loop, registry: ToolRegistry) -> None:
 
     def make_runner(context: ToolUseContext) -> SubagentRunner:
         # 项目自定义 agent 必须跟随父 agent 的 workspace，而不是 morty-code 源码目录。
+        """创建流程需要的辅助对象。"""
         agent_dir = str(context.app_state.get("agents_dir") or ".morty/agents")
         return SubagentRunner(
             query_loop=query_loop,
@@ -35,6 +36,7 @@ def register_subagent_tool(query_loop, registry: ToolRegistry) -> None:
         context: ToolUseContext,
         cache_safe: CacheSafeParams,
     ) -> dict[str, object]:
+        """处理该方法负责的业务逻辑。"""
         prompt = str(args.get("prompt") or "").strip()
         if not prompt:
             raise ValueError("prompt is required")
@@ -119,6 +121,7 @@ def _launch_background_agent(
     cache_safe: CacheSafeParams,
     max_turns: int | None,
 ) -> dict[str, object]:
+    """内部处理该方法负责的业务逻辑。"""
     task_id = str(uuid4())
     agent_id = str(uuid4())
     task_root = str(context.app_state.get("subagent_tasks_dir") or ".morty/tasks")
@@ -145,6 +148,7 @@ def _launch_background_agent(
     # 后台线程使用独立 event loop；当前 CLI 的 submit_message_sync 会关闭本轮 loop，
     # 不能依赖 asyncio.create_task 存活。
     def _worker() -> None:
+        """内部处理该方法负责的业务逻辑。"""
         try:
             result = asyncio.run(
                 runner.run(
@@ -180,6 +184,7 @@ def _launch_background_agent(
 
 
 def _optional_int(value: object) -> int | None:
+    """内部处理该方法负责的业务逻辑。"""
     if value is None or value == "":
         return None
     try:

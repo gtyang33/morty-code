@@ -23,9 +23,11 @@ class MemoryExtractor:
     """Classify new facts into session or durable memory candidates."""
 
     def __init__(self, max_summary_chars: int = 500) -> None:
+        """初始化对象状态。"""
         self.max_summary_chars = max_summary_chars
 
     def extract(self, messages: list[Message]) -> list[MemoryCandidate]:
+        """提取后续流程需要的信息。"""
         candidates: list[MemoryCandidate] = []
         seen: set[str] = set()
         for message in messages:
@@ -43,6 +45,7 @@ class MemoryExtractor:
         return candidates
 
     def _text_blocks(self, message: Message) -> list[str]:
+        """内部处理该方法负责的业务逻辑。"""
         content = message.payload.get("content")
         if not isinstance(content, list):
             return []
@@ -55,6 +58,7 @@ class MemoryExtractor:
         return blocks
 
     def _classify(self, text: str) -> MemoryCandidate | None:
+        """内部处理该方法负责的业务逻辑。"""
         if self._should_skip(text):
             return None
         lowered = text.lower()
@@ -106,6 +110,7 @@ class MemoryExtractor:
         return None
 
     def _should_skip(self, text: str) -> bool:
+        """内部判断是否需要执行后续动作。"""
         lowered = text.lower()
         if lowered.startswith("echo:") or lowered.startswith("runtime error:"):
             return True

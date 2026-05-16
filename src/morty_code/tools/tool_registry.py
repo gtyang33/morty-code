@@ -21,15 +21,19 @@ class ToolSpec:
 
 class ToolRegistry:
     def __init__(self, tools: list[ToolSpec] | None = None) -> None:
+        """初始化对象状态。"""
         self._tools = tools or []
 
     def register(self, tool: ToolSpec) -> None:
+        """注册可供后续使用的条目。"""
         self._tools.append(tool)
 
     def find(self, name: str) -> ToolSpec | None:
+        """查找匹配的注册项或数据。"""
         return next((tool for tool in self._tools if tool.name == name), None)
 
     def list_names(self) -> list[str]:
+        """列出可用条目。"""
         return [tool.name for tool in self._tools]
 
     def api_tool_schemas(self, allowed_names: set[str] | None = None) -> list[dict[str, object]]:

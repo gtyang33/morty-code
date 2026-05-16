@@ -15,6 +15,7 @@ class ParsedSlashCommand:
 
 
 def parse_slash_command(input_text: str) -> ParsedSlashCommand | None:
+    """解析输入文本或结构化数据。"""
     if not input_text.startswith("/"):
         return None
     body = input_text[1:].strip()
@@ -30,6 +31,7 @@ class SlashCommandProcessor:
     """把 slash command 编译成模型可见消息或本地结果。"""
 
     def __init__(self, registry) -> None:
+        """初始化对象状态。"""
         self.registry = registry
 
     async def process(
@@ -37,6 +39,7 @@ class SlashCommandProcessor:
         input_text: str,
         context: dict[str, object],
     ) -> ProcessedUserInput:
+        """处理输入并生成标准结果。"""
         parsed = parse_slash_command(input_text)
         if parsed is None:
             raise ValueError("input is not a slash command")

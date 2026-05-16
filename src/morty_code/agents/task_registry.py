@@ -40,6 +40,7 @@ class SubagentTaskRegistry:
     """
 
     def __init__(self, root: str | Path = ".morty/tasks") -> None:
+        """初始化对象状态。"""
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self._tasks: dict[str, SubagentTask] = {}
@@ -54,6 +55,7 @@ class SubagentTaskRegistry:
         description: str,
         prompt: str,
     ) -> SubagentTask:
+        """创建新的运行对象或记录。"""
         output_file = str(self.root / f"{task_id}.json")
         task = SubagentTask(
             task_id=task_id,
@@ -69,6 +71,7 @@ class SubagentTaskRegistry:
         return task
 
     def update(self, task: SubagentTask) -> None:
+        """处理该方法负责的业务逻辑。"""
         now = datetime.utcnow().isoformat()
         task.updated_at = now
         if task.status == "running":
@@ -82,6 +85,7 @@ class SubagentTaskRegistry:
             )
 
     def get(self, task_id: str) -> SubagentTask | None:
+        """获取运行所需数据。"""
         with self._lock:
             cached = self._tasks.get(task_id)
         if cached is not None:
@@ -114,6 +118,7 @@ class SubagentTaskRegistry:
         return sorted(tasks.values(), key=lambda task: task.created_at, reverse=True)
 
     def format_list(self, limit: int = 20) -> str:
+        """格式化输出内容。"""
         tasks = self.list()[:limit]
         if not tasks:
             return "No subagent tasks."
@@ -175,6 +180,7 @@ _REGISTRY: SubagentTaskRegistry | None = None
 
 
 def get_subagent_task_registry(root: str | Path = ".morty/tasks") -> SubagentTaskRegistry:
+    """获取运行所需数据。"""
     global _REGISTRY
     if _REGISTRY is None or _REGISTRY.root != Path(root):
         _REGISTRY = SubagentTaskRegistry(root)
@@ -182,11 +188,13 @@ def get_subagent_task_registry(root: str | Path = ".morty/tasks") -> SubagentTas
 
 
 def _task_from_payload(payload: dict[str, object]) -> SubagentTask:
+    """内部处理该方法负责的业务逻辑。"""
     allowed = set(SubagentTask.__dataclass_fields__)
     return SubagentTask(**{key: value for key, value in payload.items() if key in allowed})
 
 
 def _pid_is_alive(pid: int) -> bool:
+    """内部处理该方法负责的业务逻辑。"""
     if pid <= 0:
         return False
     try:

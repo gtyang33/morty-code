@@ -14,6 +14,7 @@ class ToolInputValidationError(ValueError):
     """模型生成的 tool input 不符合工具 schema。"""
 
     def __init__(self, tool_name: str, errors: list[ValidationErrorDetail]) -> None:
+        """初始化对象状态。"""
         self.tool_name = tool_name
         self.errors = errors
         details = "; ".join(f"{error.path}: {error.message}" for error in errors)
@@ -21,6 +22,7 @@ class ToolInputValidationError(ValueError):
 
 
 def validate_tool_input(tool_name: str, schema: dict[str, Any] | None, value: dict[str, object]) -> None:
+    """校验输入是否满足约束。"""
     if not schema:
         return
     errors: list[ValidationErrorDetail] = []
@@ -35,6 +37,7 @@ def _validate_schema(
     path: str,
     errors: list[ValidationErrorDetail],
 ) -> None:
+    """内部校验输入是否满足约束。"""
     expected_type = schema.get("type")
     if isinstance(expected_type, list):
         if not any(_matches_type(item, value) for item in expected_type):
@@ -75,6 +78,7 @@ def _validate_schema(
 
 
 def _matches_type(expected_type: str, value: object) -> bool:
+    """内部判断规则是否匹配输入。"""
     if expected_type == "object":
         return isinstance(value, dict)
     if expected_type == "array":

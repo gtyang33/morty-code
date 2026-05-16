@@ -7,6 +7,7 @@ class ConversationRecovery:
     """恢复 transcript 时做防御性清洗。"""
 
     def recover(self, messages: list[Message]) -> list[Message]:
+        """修复历史消息中的可恢复问题。"""
         recovered: list[Message] = []
         open_tool_use_ids: set[str] = set()
         for message in messages:
@@ -28,6 +29,7 @@ class ConversationRecovery:
         return recovered
 
     def _assistant_has_visible_content(self, content: object) -> bool:
+        """内部处理该方法负责的业务逻辑。"""
         if content is None or content == []:
             return False
         if isinstance(content, str):
@@ -44,6 +46,7 @@ class ConversationRecovery:
         return False
 
     def _tool_use_ids(self, content: object) -> set[str]:
+        """内部处理该方法负责的业务逻辑。"""
         if not isinstance(content, list):
             return set()
         return {
@@ -53,6 +56,7 @@ class ConversationRecovery:
         }
 
     def _tool_result_ids(self, content: object) -> set[str]:
+        """内部处理该方法负责的业务逻辑。"""
         if not isinstance(content, list):
             return set()
         return {

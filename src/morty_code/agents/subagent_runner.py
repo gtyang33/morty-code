@@ -38,6 +38,7 @@ class SubagentRunner:
         tool_registry: ToolRegistry,
         agent_registry: AgentRegistry | None = None,
     ) -> None:
+        """初始化对象状态。"""
         self.query_loop = query_loop
         self.tool_registry = tool_registry
         self.agent_registry = agent_registry or AgentRegistry()
@@ -53,6 +54,7 @@ class SubagentRunner:
         agent_id: str | None = None,
         record_transcript: bool = True,
     ) -> SubagentRunResult:
+        """执行核心流程。"""
         definition = self._resolve_agent(agent_type)
         resolved_agent_id = agent_id or str(uuid4())
         allowed_tools = self._resolve_allowed_tools(definition, parent_context.tools)
@@ -148,6 +150,7 @@ class SubagentRunner:
         )
 
     def _resolve_agent(self, agent_type: str) -> AgentDefinition:
+        """内部解析名称或路径到具体对象。"""
         selected = self.agent_registry.find(agent_type or "general-purpose")
         if selected is None:
             available = ", ".join(agent.agent_type for agent in self.agent_registry.list())
@@ -159,6 +162,7 @@ class SubagentRunner:
         definition: AgentDefinition,
         parent_tools: list[str],
     ) -> list[str]:
+        """内部解析名称或路径到具体对象。"""
         if definition.tools == ["*"]:
             allowed = list(parent_tools)
         else:
@@ -175,6 +179,7 @@ class SubagentRunner:
         parent_cache_safe: CacheSafeParams,
         allowed_tools: list[str],
     ) -> CacheSafeParams:
+        """内部构建后续流程需要的数据。"""
         system_context = dict(parent_cache_safe.system_context)
         system_context["tool_schemas_json"] = json.dumps(
             self.tool_registry.api_tool_schemas(set(allowed_tools)),
@@ -189,6 +194,7 @@ class SubagentRunner:
         )
 
     def _prompt_message(self, prompt: str, definition: AgentDefinition) -> Message:
+        """内部处理该方法负责的业务逻辑。"""
         content = prompt
         if definition.readonly:
             content = f"{prompt}\n\nReminder: this is a read-only delegated task."
@@ -206,6 +212,7 @@ class SubagentRunner:
         parent_context: ToolUseContext,
         agent_id: str,
     ) -> TranscriptStore | None:
+        """内部创建流程需要的辅助对象。"""
         session_id = str(parent_context.app_state.get("session_id") or "default")
         root = Path(str(parent_context.app_state.get("subagent_transcripts_dir") or ".morty/subagents"))
         path = root / session_id / f"{agent_id}.jsonl"
@@ -217,11 +224,13 @@ class SubagentRunner:
         event: dict[str, object],
         enabled: bool,
     ) -> None:
+        """内部追加运行过程产生的数据。"""
         if not enabled or transcript_store is None:
             return
         await transcript_store.append_event(event)
 
     def _extract_final_output(self, messages: list[Message]) -> str:
+        """内部提取后续流程需要的信息。"""
         for message in reversed(messages):
             if message.type != "assistant":
                 continue

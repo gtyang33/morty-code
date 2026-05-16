@@ -21,6 +21,7 @@ class UserInputProcessor:
         attachment_manager: AttachmentManager,
         command_registry: CommandRegistry | None = None,
     ) -> None:
+        """初始化对象状态。"""
         self.attachment_manager = attachment_manager
         self.command_registry = command_registry or self._build_default_commands()
         self.slash_processor = SlashCommandProcessor(self.command_registry)
@@ -32,6 +33,7 @@ class UserInputProcessor:
         messages: list[Message],
         skip_attachments: bool = False,
     ) -> ProcessedUserInput:
+        """处理输入并生成标准结果。"""
         self.attachment_manager.bind_context(context)
         text = command.value if isinstance(command.value, str) else ""
         if text.startswith("/") and not command.skip_slash_commands:
@@ -116,6 +118,7 @@ class UserInputProcessor:
         return blocks
 
     def _build_default_commands(self) -> CommandRegistry:
+        """内部构建后续流程需要的数据。"""
         registry = CommandRegistry()
         registry.register(
             CommandSpec(
@@ -210,6 +213,7 @@ class UserInputProcessor:
         return registry
 
     async def _handle_help(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        """内部处理该方法负责的业务逻辑。"""
         commands = sorted(
             self.command_registry.list_user_invocable(),
             key=lambda command: command.name,
@@ -222,6 +226,7 @@ class UserInputProcessor:
         }
 
     async def _handle_tasks(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        """内部处理该方法负责的业务逻辑。"""
         tool_context = context["tool_context"]
         if not isinstance(tool_context, ToolUseContext):
             return {"mode": "local", "content": "Task context unavailable."}
@@ -250,6 +255,7 @@ class UserInputProcessor:
         return {"mode": "local", "content": registry.format_list()}
 
     async def _handle_status(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        """内部处理该方法负责的业务逻辑。"""
         tool_context = context["tool_context"]
         messages = context["messages"]
         if not isinstance(tool_context, ToolUseContext) or not isinstance(messages, list):
@@ -284,6 +290,7 @@ class UserInputProcessor:
         }
 
     async def _handle_tools(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        """内部处理该方法负责的业务逻辑。"""
         tool_context = context["tool_context"]
         if not isinstance(tool_context, ToolUseContext):
             return {"mode": "local", "content": "Tool context unavailable."}
@@ -307,6 +314,7 @@ class UserInputProcessor:
         }
 
     async def _handle_memory_index(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        """内部处理该方法负责的业务逻辑。"""
         tool_context = context["tool_context"]
         if not isinstance(tool_context, ToolUseContext) or not tool_context.durable_memory_dir:
             return {"mode": "local", "content": "No durable memory directory configured."}
@@ -314,6 +322,7 @@ class UserInputProcessor:
         return {"mode": "local", "content": index.strip() or "Memory index is empty."}
 
     async def _handle_plan_mode(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        """内部处理该方法负责的业务逻辑。"""
         tool_context = context["tool_context"]
         if not isinstance(tool_context, ToolUseContext):
             return {"mode": "local", "content": "Tool context unavailable."}
@@ -335,6 +344,7 @@ class UserInputProcessor:
         }
 
     async def _handle_plan_save(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        """内部处理该方法负责的业务逻辑。"""
         tool_context = context["tool_context"]
         if not isinstance(tool_context, ToolUseContext):
             return {"mode": "local", "content": "Tool context unavailable."}
@@ -347,6 +357,7 @@ class UserInputProcessor:
         return {"mode": "local", "content": f"Plan saved to {plan_path}."}
 
     async def _handle_plan_show(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        """内部处理该方法负责的业务逻辑。"""
         tool_context = context["tool_context"]
         if not isinstance(tool_context, ToolUseContext):
             return {"mode": "local", "content": "Tool context unavailable."}
@@ -357,6 +368,7 @@ class UserInputProcessor:
         return {"mode": "local", "content": f"Plan file: {plan_store.path}\n\n{content}"}
 
     async def _handle_auto_mode(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        """内部处理该方法负责的业务逻辑。"""
         tool_context = context["tool_context"]
         if not isinstance(tool_context, ToolUseContext):
             return {"mode": "local", "content": "Tool context unavailable."}
@@ -381,12 +393,14 @@ class UserInputProcessor:
         return {"mode": "local", "content": "Plan approved. Auto mode enabled."}
 
     async def _handle_compact(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        """内部处理该方法负责的业务逻辑。"""
         return {
             "mode": "compact",
             "content": "Conversation compaction requested.",
         }
 
     async def _handle_memory(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        """内部处理该方法负责的业务逻辑。"""
         return {
             "mode": "prompt",
             "content": "Please refresh session memory and surface relevant durable memories for the current task.",

@@ -11,7 +11,8 @@ from morty_code.types.runtime_state import ContentReplacementState
 PERSISTED_OUTPUT_TAG = "<persisted-output>"
 PERSISTED_OUTPUT_CLOSING_TAG = "</persisted-output>"
 PREVIEW_SIZE_CHARS = 2000
-DEFAULT_MESSAGE_BUDGET_CHARS = 50000
+DEFAULT_RESULT_BUDGET_CHARS = 50000
+DEFAULT_MESSAGE_BUDGET_CHARS = 200000
 
 
 @dataclass
@@ -28,6 +29,7 @@ class ToolResultReplacementRecord:
     replacement: str
 
     def as_event_payload(self) -> dict[str, object]:
+        """转换为目标表示。"""
         return {
             "kind": self.kind,
             "tool_use_id": self.tool_use_id,
@@ -116,6 +118,7 @@ def apply_tool_result_budget(
 
 
 def _build_tool_name_map(messages: list[Message]) -> dict[str, str]:
+    """内部构建后续流程需要的数据。"""
     mapping: dict[str, str] = {}
     for message in messages:
         if message.type != "assistant":
@@ -130,11 +133,13 @@ def _build_tool_name_map(messages: list[Message]) -> dict[str, str]:
 
 
 def _collect_candidates_by_wire_message(messages: list[Message]) -> list[list[ToolResultCandidate]]:
+    """内部收集当前阶段需要的上下文。"""
     groups: list[list[ToolResultCandidate]] = []
     current: list[ToolResultCandidate] = []
     seen_assistant_ids: set[str] = set()
 
     def flush() -> None:
+        """处理该方法负责的业务逻辑。"""
         nonlocal current
         if current:
             groups.append(current)
@@ -153,6 +158,7 @@ def _collect_candidates_by_wire_message(messages: list[Message]) -> list[list[To
 
 
 def _collect_candidates_from_message(message: Message) -> list[ToolResultCandidate]:
+    """内部收集当前阶段需要的上下文。"""
     content = message.payload.get("content")
     if not isinstance(content, list):
         return []
@@ -179,6 +185,7 @@ def _partition_by_prior_decision(
     candidates: list[ToolResultCandidate],
     state: ContentReplacementState,
 ) -> tuple[list[tuple[ToolResultCandidate, str]], list[ToolResultCandidate], list[ToolResultCandidate]]:
+    """内部处理该方法负责的业务逻辑。"""
     must_reapply: list[tuple[ToolResultCandidate, str]] = []
     frozen: list[ToolResultCandidate] = []
     fresh: list[ToolResultCandidate] = []
@@ -198,6 +205,7 @@ def _select_largest_until_under_budget(
     frozen_size: int,
     limit: int,
 ) -> list[ToolResultCandidate]:
+    """内部处理该方法负责的业务逻辑。"""
     selected: list[ToolResultCandidate] = []
     remaining = frozen_size + sum(candidate.size for candidate in fresh)
     for candidate in sorted(fresh, key=lambda item: item.size, reverse=True):
@@ -212,8 +220,10 @@ def _persist_and_build_replacement(
     candidate: ToolResultCandidate,
     tool_results_dir: str | Path,
 ) -> str:
+    """内部处理该方法负责的业务逻辑。"""
     content = _stringify_content(candidate.content)
     path = Path(tool_results_dir) / f"{candidate.tool_use_id}.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
         path.write_text(content, encoding="utf-8")
     preview = _preview(content)
@@ -231,6 +241,7 @@ def _replace_tool_result_contents(
     messages: list[Message],
     replacement_map: dict[str, str],
 ) -> list[Message]:
+    """内部处理该方法负责的业务逻辑。"""
     replaced_messages: list[Message] = []
     for message in messages:
         content = message.payload.get("content")
@@ -269,6 +280,7 @@ def _replace_tool_result_contents(
 
 
 def _is_empty(content: object) -> bool:
+    """内部判断当前对象是否满足条件。"""
     if content is None:
         return True
     if isinstance(content, str):
@@ -279,6 +291,7 @@ def _is_empty(content: object) -> bool:
 
 
 def _has_image_block(content: object) -> bool:
+    """内部判断当前对象是否包含目标内容。"""
     return isinstance(content, list) and any(
         isinstance(block, dict) and block.get("type") == "image"
         for block in content
@@ -286,6 +299,7 @@ def _has_image_block(content: object) -> bool:
 
 
 def _content_size(content: object) -> int:
+    """内部处理该方法负责的业务逻辑。"""
     if isinstance(content, str):
         return len(content)
     if isinstance(content, list):
@@ -298,12 +312,14 @@ def _content_size(content: object) -> int:
 
 
 def _stringify_content(content: object) -> str:
+    """内部处理该方法负责的业务逻辑。"""
     if isinstance(content, str):
         return content
     return json.dumps(content, ensure_ascii=False, indent=2)
 
 
 def _preview(content: str) -> str:
+    """内部处理该方法负责的业务逻辑。"""
     if len(content) <= PREVIEW_SIZE_CHARS:
         return content
     truncated = content[:PREVIEW_SIZE_CHARS]

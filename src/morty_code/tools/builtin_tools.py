@@ -45,6 +45,7 @@ def create_local_tool_registry(
         context: ToolUseContext,
         _cache_safe: CacheSafeParams,
     ) -> dict[str, object]:
+        """读取持久化内容。"""
         path = _resolve_under_root(root, str(args.get("path", "")))
         assert_safe_read_path(root, path)
         if path.is_dir():
@@ -80,6 +81,7 @@ def create_local_tool_registry(
         }
 
     async def list_dir(args: dict[str, object]) -> dict[str, object]:
+        """列出可用条目。"""
         path = _resolve_under_root(root, str(args.get("path", ".")))
         if not path.is_dir():
             raise ValueError(f"{path} is not a directory")
@@ -98,6 +100,7 @@ def create_local_tool_registry(
         }
 
     async def glob_files(args: dict[str, object]) -> dict[str, object]:
+        """处理该方法负责的业务逻辑。"""
         pattern = str(args.get("pattern") or "").strip()
         if not pattern:
             raise ValueError("pattern is required")
@@ -122,6 +125,7 @@ def create_local_tool_registry(
         }
 
     async def grep_text(args: dict[str, object]) -> dict[str, object]:
+        """处理该方法负责的业务逻辑。"""
         pattern = str(args.get("pattern") or "")
         if not pattern:
             raise ValueError("pattern is required")
@@ -166,6 +170,7 @@ def create_local_tool_registry(
         }
 
     async def file_info(args: dict[str, object]) -> dict[str, object]:
+        """处理该方法负责的业务逻辑。"""
         path = _resolve_under_root(root, str(args.get("path", "")))
         assert_safe_read_path(root, path)
         stat = path.stat()
@@ -182,6 +187,7 @@ def create_local_tool_registry(
         _context: ToolUseContext,
         _cache_safe: CacheSafeParams,
     ) -> dict[str, object]:
+        """创建新的运行对象或记录。"""
         path = _resolve_for_write(root, str(args.get("path", "")))
         assert_safe_write_path(root, path)
         existed = path.exists()
@@ -198,6 +204,7 @@ def create_local_tool_registry(
         context: ToolUseContext,
         _cache_safe: CacheSafeParams,
     ) -> dict[str, object]:
+        """写入持久化内容。"""
         path = _resolve_for_write(root, str(args.get("path", "")))
         assert_safe_write_path(root, path)
         content = str(args.get("content", ""))
@@ -220,11 +227,38 @@ def create_local_tool_registry(
             "diff": _simple_diff(original or "", content),
         }
 
+    async def append_file(
+        args: dict[str, object],
+        context: ToolUseContext,
+        _cache_safe: CacheSafeParams,
+    ) -> dict[str, object]:
+        """追加运行过程产生的数据。"""
+        path = _resolve_for_write(root, str(args.get("path", "")))
+        assert_safe_write_path(root, path)
+        content = str(args.get("content", ""))
+        existed = path.exists()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as file:
+            file.write(content)
+        visible = path.read_text(encoding="utf-8", errors="replace")[:max_read_chars]
+        context.read_file_state[str(path)] = FileViewState(
+            path=str(path),
+            content=visible,
+            timestamp=path.stat().st_mtime * 1000,
+            is_partial_view=path.stat().st_size > max_read_chars,
+        )
+        return {
+            "path": str(path),
+            "operation": "append" if existed else "create",
+            "bytes_written": len(content.encode("utf-8")),
+        }
+
     async def edit_file(
         args: dict[str, object],
         context: ToolUseContext,
         _cache_safe: CacheSafeParams,
     ) -> dict[str, object]:
+        """处理该方法负责的业务逻辑。"""
         path = _resolve_under_root(root, str(args.get("path", "")))
         assert_safe_write_path(root, path)
         old = str(args.get("old_string", ""))
@@ -260,6 +294,7 @@ def create_local_tool_registry(
         context: ToolUseContext,
         _cache_safe: CacheSafeParams,
     ) -> dict[str, object]:
+        """处理该方法负责的业务逻辑。"""
         path = _resolve_under_root(root, str(args.get("path", "")))
         assert_safe_write_path(root, path)
         edits = args.get("edits")
@@ -306,6 +341,7 @@ def create_local_tool_registry(
         _context: ToolUseContext,
         _cache_safe: CacheSafeParams,
     ) -> dict[str, object]:
+        """处理该方法负责的业务逻辑。"""
         source = _resolve_under_root(root, str(args.get("source", "")))
         destination = _resolve_for_write(root, str(args.get("destination", "")))
         assert_safe_write_path(root, source)
@@ -325,6 +361,7 @@ def create_local_tool_registry(
         context: ToolUseContext,
         _cache_safe: CacheSafeParams,
     ) -> dict[str, object]:
+        """处理该方法负责的业务逻辑。"""
         command = str(args.get("command") or "").strip()
         if not command:
             raise ValueError("command is required")
@@ -365,6 +402,7 @@ def create_local_tool_registry(
         context: ToolUseContext,
         _cache_safe: CacheSafeParams,
     ) -> dict[str, object]:
+        """处理该方法负责的业务逻辑。"""
         todos = args.get("todos")
         if not isinstance(todos, list):
             raise ValueError("todos must be a list")
@@ -498,6 +536,20 @@ def create_local_tool_registry(
                 },
             ),
             ToolSpec(
+                name="append_file",
+                description="Append UTF-8 content to a file under the workspace root. Use this to write long documents in sections instead of one huge write_file call.",
+                handler=append_file,
+                needs_context=True,
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Relative file path under the workspace root."},
+                        "content": {"type": "string", "description": "Content chunk to append."},
+                    },
+                    "required": ["path", "content"],
+                },
+            ),
+            ToolSpec(
                 name="edit_file",
                 description="Replace exact text in a file under the workspace root. File must be read first.",
                 handler=edit_file,
@@ -594,6 +646,7 @@ def create_local_tool_registry(
 
 
 def _resolve_under_root(root: Path, raw_path: str) -> Path:
+    """内部解析名称或路径到具体对象。"""
     if not raw_path:
         raise ValueError("path is required")
     path = Path(raw_path).expanduser()
@@ -608,6 +661,7 @@ def _resolve_under_root(root: Path, raw_path: str) -> Path:
 
 
 def _resolve_for_write(root: Path, raw_path: str) -> Path:
+    """内部解析名称或路径到具体对象。"""
     if not raw_path:
         raise ValueError("path is required")
     path = Path(raw_path).expanduser()
@@ -620,6 +674,7 @@ def _resolve_for_write(root: Path, raw_path: str) -> Path:
 
 
 def _walk_files(base: Path):
+    """内部处理该方法负责的业务逻辑。"""
     for child in base.rglob("*"):
         if any(part in _SKIP_DIRS for part in child.parts):
             continue
@@ -634,6 +689,7 @@ def _optional_int(
     minimum: int,
     maximum: int | None = None,
 ) -> int:
+    """内部处理该方法负责的业务逻辑。"""
     try:
         parsed = default if value is None or value == "" else int(value)
     except (TypeError, ValueError):
@@ -645,6 +701,7 @@ def _optional_int(
 
 
 def _ensure_fresh_read(path: Path, context: ToolUseContext) -> None:
+    """内部确保依赖资源处于可用状态。"""
     state = context.read_file_state.get(str(path))
     if state is None:
         raise PermissionError("file must be read before write/edit")
@@ -656,6 +713,7 @@ def _ensure_fresh_read(path: Path, context: ToolUseContext) -> None:
 
 
 def _simple_diff(old: str, new: str, max_chars: int = 12000) -> str:
+    """内部处理该方法负责的业务逻辑。"""
     import difflib
 
     diff = "\n".join(

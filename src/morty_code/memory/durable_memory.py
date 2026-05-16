@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -15,6 +16,7 @@ class DurableMemoryStore:
         max_index_lines: int = 200,
         max_index_bytes: int = 24000,
     ) -> None:
+        """初始化对象状态。"""
         self.root_dir = Path(root_dir)
         self.root_dir.mkdir(parents=True, exist_ok=True)
         self.index_path = self.root_dir / "MEMORY.md"
@@ -22,10 +24,12 @@ class DurableMemoryStore:
         self.max_index_bytes = max_index_bytes
 
     def ensure_exists(self) -> None:
+        """确保依赖资源处于可用状态。"""
         if not self.index_path.exists():
             self.index_path.write_text("# Memory Index\n", encoding="utf-8")
 
     def append_summary(self, summary: str, memory_type: str = "project") -> None:
+        """追加运行过程产生的数据。"""
         self.ensure_exists()
         clean = " ".join(summary.strip().split())
         if not clean:
@@ -43,11 +47,13 @@ class DurableMemoryStore:
         self._truncate_index()
 
     def read_index(self) -> str:
+        """读取持久化内容。"""
         self.ensure_exists()
         return self.index_path.read_text(encoding="utf-8")
 
     def _topic_path(self, summary: str) -> Path:
         # 用摘要前几个词生成稳定 topic 文件名；中英文都保留，便于人工查看。
+        """内部处理该方法负责的业务逻辑。"""
         words = re.findall(r"[A-Za-z0-9\u4e00-\u9fff]+", summary.lower())[:8]
         stem = "-".join(words)[:80] or "memory"
         return self.root_dir / f"{stem}.md"
@@ -58,6 +64,7 @@ class DurableMemoryStore:
         summary: str,
         memory_type: str,
     ) -> None:
+        """内部确保依赖资源处于可用状态。"""
         if topic_path.exists() and topic_path.read_text(encoding="utf-8", errors="replace").strip():
             return
         clean_type = memory_type if memory_type in MEMORY_TYPES else "project"
@@ -65,8 +72,8 @@ class DurableMemoryStore:
             "\n".join(
                 [
                     "---",
-                    f"name: {self._frontmatter_name(summary)}",
-                    f"description: {summary[:180]}",
+                    f"name: {self._yaml_string(self._frontmatter_name(summary))}",
+                    f"description: {self._yaml_string(summary[:180])}",
                     f"type: {clean_type}",
                     "---",
                     "",
@@ -76,10 +83,16 @@ class DurableMemoryStore:
         )
 
     def _frontmatter_name(self, summary: str) -> str:
+        """内部处理该方法负责的业务逻辑。"""
         words = re.findall(r"[A-Za-z0-9\u4e00-\u9fff]+", summary)[:8]
         return " ".join(words)[:80] or "memory"
 
+    def _yaml_string(self, value: str) -> str:
+        """内部处理该方法负责的业务逻辑。"""
+        return json.dumps(value, ensure_ascii=False)
+
     def _topic_contains(self, topic_path: Path, summary: str) -> bool:
+        """内部处理该方法负责的业务逻辑。"""
         content = topic_path.read_text(encoding="utf-8", errors="replace")
         target = " ".join(summary.lower().split())
         for line in content.splitlines():
@@ -91,12 +104,14 @@ class DurableMemoryStore:
     def _truncate_index(self) -> None:
         # MEMORY.md 是 prompt 热路径的一部分，必须同时限制行数和字节数；
         # 老条目仍在 topic 文件里，只是从索引里淘汰。
+        """内部处理该方法负责的业务逻辑。"""
         content = self.index_path.read_text(encoding="utf-8")
         lines = content.splitlines()
         if len(lines) <= self.max_index_lines and len(content.encode("utf-8")) <= self.max_index_bytes:
             return
         header = lines[:1] or ["# Memory Index"]
-        kept = lines[-(self.max_index_lines - len(header)) :]
+        body_line_budget = max(0, self.max_index_lines - len(header))
+        kept = lines[-body_line_budget:] if body_line_budget > 0 else []
         trimmed = "\n".join([*header, *kept]) + "\n"
         while len(trimmed.encode("utf-8")) > self.max_index_bytes and len(kept) > 1:
             kept = kept[1:]

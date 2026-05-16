@@ -25,6 +25,7 @@ class ForkedAgentRunner:
     """共享 cache-safe 前缀，但 clone mutable state。"""
 
     def __init__(self, query_loop, transcript_store=None) -> None:
+        """初始化对象状态。"""
         self.query_loop = query_loop
         self.transcript_store = transcript_store
 
@@ -35,6 +36,7 @@ class ForkedAgentRunner:
         fork_label: str = "forked_agent",
         skip_cache_write: bool = False,
     ) -> ToolUseContext:
+        """克隆可变运行状态。"""
         return clone_tool_use_context_for_fork(
             context,
             fork_label=fork_label,
@@ -51,6 +53,7 @@ class ForkedAgentRunner:
         skip_transcript: bool = False,
         skip_cache_write: bool = True,
     ) -> list[Message]:
+        """执行核心流程。"""
         result = await self.run_with_result(
             cache_safe=cache_safe,
             prompt_messages=prompt_messages,
@@ -72,6 +75,7 @@ class ForkedAgentRunner:
         skip_transcript: bool = False,
         skip_cache_write: bool = True,
     ) -> ForkedAgentResult:
+        """执行核心流程。"""
         if self.query_loop is None:
             return ForkedAgentResult(messages=[], metadata_events=[], isolated_context=tool_context)
         isolated_context = self.clone_mutable_state(

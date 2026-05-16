@@ -110,6 +110,7 @@ def evaluate_tool_permission(
 
 
 def _as_string_set(value: object) -> set[str]:
+    """内部转换为目标表示。"""
     if value is None:
         return set()
     if isinstance(value, str):
@@ -120,10 +121,12 @@ def _as_string_set(value: object) -> set[str]:
 
 
 def _matches_tool_rule(rules: set[str], tool_name: str) -> bool:
+    """内部判断规则是否匹配输入。"""
     return "*" in rules or tool_name in rules or any(rule_matches_tool(rule, tool_name) for rule in rules)
 
 
 def _matches_content_rule(rules: set[str], tool_name: str, command: str) -> str | None:
+    """内部判断规则是否匹配输入。"""
     if tool_name != "bash" or not command:
         return None
     for rule in sorted(rules):
@@ -133,4 +136,5 @@ def _matches_content_rule(rules: set[str], tool_name: str, command: str) -> str 
 
 
 def _rule_suffix(rule: str | None) -> str:
+    """内部处理该方法负责的业务逻辑。"""
     return f" ({rule})" if rule else ""

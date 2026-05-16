@@ -27,20 +27,25 @@ class AgentRegistry:
     """按优先级管理 built-in 和项目级 agent。"""
 
     def __init__(self, agents: list[AgentDefinition] | None = None) -> None:
+        """初始化对象状态。"""
         self._agents: dict[str, AgentDefinition] = {}
         for agent in agents or default_agent_definitions():
             self.register(agent)
 
     def register(self, agent: AgentDefinition) -> None:
+        """注册可供后续使用的条目。"""
         self._agents[agent.agent_type] = agent
 
     def find(self, agent_type: str) -> AgentDefinition | None:
+        """查找匹配的注册项或数据。"""
         return self._agents.get(agent_type)
 
     def list(self) -> list[AgentDefinition]:
+        """列出可用条目。"""
         return sorted(self._agents.values(), key=lambda item: item.agent_type)
 
     def render_discovery_text(self) -> str:
+        """渲染面向用户或模型的文本。"""
         lines = ["Available subagents:"]
         for agent in self.list():
             lines.append(f"- {agent.agent_type}: {agent.when_to_use}")
@@ -113,6 +118,7 @@ def load_project_agents(agent_dir: str | Path = ".morty/agents") -> AgentRegistr
 
 
 def parse_agent_markdown(path: Path) -> AgentDefinition | None:
+    """解析输入文本或结构化数据。"""
     text = path.read_text(encoding="utf-8", errors="replace")
     if not text.startswith("---\n"):
         return None
@@ -148,6 +154,7 @@ def parse_agent_markdown(path: Path) -> AgentDefinition | None:
 
 
 def _parse_list(raw: str | None) -> list[str]:
+    """内部解析输入文本或结构化数据。"""
     if not raw:
         return []
     raw = raw.strip()

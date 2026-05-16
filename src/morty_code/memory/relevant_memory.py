@@ -15,26 +15,36 @@ class RelevantMemoryFinder:
         max_file_chars: int = 6000,
         max_total_chars: int = 18000,
     ) -> None:
+        """初始化对象状态。"""
         self.root_dir = Path(root_dir)
         self.max_files = max_files
         self.max_file_chars = max_file_chars
         self.max_total_chars = max_total_chars
 
     def find(self, input_text: str) -> list[Attachment]:
+        """查找匹配的注册项或数据。"""
         if not self.root_dir.exists():
             return []
-        matches: list[Attachment] = []
-        lowered = input_text.lower()
-        used_chars = 0
+        tokens = self._tokens(input_text.lower())
+        if not tokens:
+            return []
+        scored: list[tuple[int, Path, str]] = []
         for path in sorted(self.root_dir.glob("*.md")):
             if path.name == "MEMORY.md":
                 # MEMORY.md 是轻量索引，不作为 topic 正文重复注入。
                 continue
-            name = path.stem.lower()
-            content = path.read_text(encoding="utf-8", errors="replace")
-            haystack = f"{name}\n{content}".lower()
-            if not self._looks_relevant(lowered, haystack):
+            try:
+                content = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
                 continue
+            haystack = f"{path.stem}\n{content}".lower()
+            score = self._score(tokens, haystack)
+            if score > 0:
+                scored.append((score, path, content))
+        scored.sort(key=lambda item: (-item[0], str(item[1])))
+        matches: list[Attachment] = []
+        used_chars = 0
+        for _, path, content in scored:
             remaining = self.max_total_chars - used_chars
             if remaining <= 0 or len(matches) >= self.max_files:
                 break
@@ -53,12 +63,14 @@ class RelevantMemoryFinder:
             )
         return matches
 
-    def _looks_relevant(self, lowered_input: str, lowered_memory: str) -> bool:
-        tokens = {
+    def _tokens(self, lowered_input: str) -> set[str]:
+        """内部处理该方法负责的业务逻辑。"""
+        return {
             token
             for token in lowered_input.replace("/", " ").replace("_", " ").split()
             if len(token) >= 3
         }
-        if not tokens:
-            return False
-        return any(token in lowered_memory for token in tokens)
+
+    def _score(self, tokens: set[str], lowered_memory: str) -> int:
+        """内部处理该方法负责的业务逻辑。"""
+        return sum(1 for token in tokens if token in lowered_memory)

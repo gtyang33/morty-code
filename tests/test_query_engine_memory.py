@@ -43,6 +43,20 @@ class AsyncStubExtractor:
         ]
 
 
+class TypedDurableExtractor:
+    async def extract(self, messages: list[Message]) -> list[MemoryCandidate]:
+        return [
+            MemoryCandidate(
+                "The user disliked the previous migration strategy.",
+                "durable",
+                "preference",
+                0.9,
+                "model",
+                memory_type="feedback",
+            )
+        ]
+
+
 def make_engine(*, memory_write_char_threshold: int = 12000) -> QueryEngine:
     return QueryEngine(
         prompt_builder=None,
@@ -170,3 +184,31 @@ def test_async_memory_extractor_writes_model_candidates(tmp_path: Path) -> None:
     topic_text = durable_topic.read_text(encoding="utf-8")
     assert "The user prefers concise Chinese answers." in topic_text
     assert "type: user\n" in topic_text
+
+
+def test_memory_routing_uses_explicit_durable_memory_type(tmp_path: Path) -> None:
+    engine = QueryEngine(
+        prompt_builder=None,
+        input_dispatcher=None,
+        input_processor=None,
+        query_loop=None,
+        transcript_store=None,
+        memory_extractor=TypedDurableExtractor(),  # type: ignore[arg-type]
+    )
+    context = make_context(tmp_path)
+
+    wrote = asyncio.run(
+        engine._maybe_write_memories_async(
+            context,
+            [assistant_message("final response")],
+            raw_input="/memory",
+        )
+    )
+
+    assert wrote is True
+    durable_topic = next(
+        path
+        for path in Path(context.durable_memory_dir or "").glob("*.md")
+        if path.name != "MEMORY.md"
+    )
+    assert "type: feedback\n" in durable_topic.read_text(encoding="utf-8")

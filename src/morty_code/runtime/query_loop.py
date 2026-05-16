@@ -18,7 +18,7 @@ from morty_code.cache.prompt_cache import (
 )
 from morty_code.agents.subagent_tool import register_subagent_tool
 from morty_code.agents.task_output_tool import register_task_output_tool
-from morty_code.tools.tool_result_budget import apply_tool_result_budget
+from morty_code.tools.tool_result_budget import DEFAULT_MESSAGE_BUDGET_CHARS, apply_tool_result_budget
 from morty_code.transcript.message_normalizer import MessageNormalizer
 from morty_code.types.messages import Message
 from morty_code.types.runtime_state import CacheSafeParams, ToolUseContext
@@ -47,6 +47,7 @@ class QueryLoop:
         max_iterations: int = 6,
         max_api_retries: int = 2,
     ) -> None:
+        """初始化对象状态。"""
         self.model_client = model_client
         self.tool_runner = tool_runner
         registry = getattr(tool_runner, "registry", None)
@@ -67,6 +68,7 @@ class QueryLoop:
         max_iterations: int | None = None,
         on_new_messages: Callable[[list[Message]], None] | None = None,
     ) -> QueryLoopResult:
+        """执行核心流程。"""
         new_messages: list[Message] = []
         metadata_events: list[dict[str, object]] = []
         working_messages = list(messages)
@@ -84,7 +86,12 @@ class QueryLoop:
                     "tool_results_dir",
                     ".morty/tool-results",
                 ),
-                limit=int(tool_context.app_state.get("tool_result_message_budget_chars", 50000)),
+                limit=int(
+                    tool_context.app_state.get(
+                        "tool_result_message_budget_chars",
+                        DEFAULT_MESSAGE_BUDGET_CHARS,
+                    )
+                ),
                 skip_tool_names=set(tool_context.app_state.get("tool_result_budget_skip_tools", [])),
             )
             if replacement_records:
@@ -271,6 +278,7 @@ class QueryLoop:
 
     @staticmethod
     def _message_has_tool_uses(message: Message) -> bool:
+        """内部处理该方法负责的业务逻辑。"""
         content = message.payload.get("content")
         if not isinstance(content, list):
             return False
@@ -284,6 +292,7 @@ class QueryLoop:
         callback: Callable[[list[Message]], None] | None,
         messages: list[Message],
     ) -> None:
+        """内部处理该方法负责的业务逻辑。"""
         if callback is not None and messages:
             callback(messages)
 
@@ -297,6 +306,7 @@ class QueryLoop:
         fallback_system_context: dict[str, str],
         metadata_events: list[dict[str, object]],
     ) -> Message:
+        """内部处理该方法负责的业务逻辑。"""
         cache_disabled_for_retry = False
         active_messages = messages
         active_system_context = system_context
@@ -390,6 +400,7 @@ class QueryLoop:
         tool_schemas_json: str | None,
         metadata_events: list[dict[str, object]],
     ) -> list[dict[str, object]]:
+        """内部加载外部配置或数据。"""
         if not tool_schemas_json:
             return []
         try:
@@ -408,6 +419,7 @@ class QueryLoop:
             return []
 
     def _api_error_message(self, content: str, status: int | None) -> Message:
+        """内部处理该方法负责的业务逻辑。"""
         prefix = f"Model provider error"
         if status is not None:
             prefix += f" HTTP {status}"
@@ -424,11 +436,13 @@ class QueryLoop:
         )
 
     def _retry_delay(self, attempt: int, retry_after: float | None) -> float:
+        """内部处理该方法负责的业务逻辑。"""
         if retry_after is not None:
             return min(retry_after, 5.0)
         return min(0.25 * (2 ** (attempt - 1)), 2.0)
 
     def _json_dumps(self, value: object) -> str:
+        """内部处理该方法负责的业务逻辑。"""
         return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
     def _error_content_with_dump(
@@ -436,6 +450,7 @@ class QueryLoop:
         content: str,
         dump_event: dict[str, object] | None,
     ) -> str:
+        """内部处理该方法负责的业务逻辑。"""
         if dump_event is None or dump_event.get("type") != "prompt-dump":
             return content
         return f"{content}\nPrompt dump: {dump_event.get('path')}"
@@ -450,6 +465,7 @@ class QueryLoop:
         user_context: dict[str, str],
         system_context: dict[str, str],
     ) -> dict[str, object] | None:
+        """内部处理该方法负责的业务逻辑。"""
         if os.environ.get("MORTY_DUMP_PROMPT_ON_ERROR") != "1":
             return None
         dump_dir = Path(os.environ.get("MORTY_PROMPT_DUMP_DIR") or ".morty/prompt-dumps")
@@ -506,6 +522,7 @@ class QueryLoop:
 
 
 def _shorten(value: str, limit: int = 500) -> str:
+    """内部处理该方法负责的业务逻辑。"""
     value = " ".join(value.split())
     if len(value) <= limit:
         return value

@@ -67,6 +67,7 @@ def load_permission_settings(
 
 
 def _read_settings_file(path: Path) -> dict[str, Any]:
+    """内部读取持久化内容。"""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
@@ -77,6 +78,7 @@ def _read_settings_file(path: Path) -> dict[str, Any]:
 
 
 def _merge_settings(target: PermissionSettings, data: dict[str, Any], source: str) -> None:
+    """内部合并相邻或相关的数据块。"""
     permissions = data.get("permissions", data)
     if not isinstance(permissions, dict):
         raise ValueError(f"permissions must be an object: {source}")
@@ -90,6 +92,7 @@ def _merge_settings(target: PermissionSettings, data: dict[str, Any], source: st
 
 
 def _as_string_list(value: object, source: str, key: str) -> list[str]:
+    """内部转换为目标表示。"""
     if value is None:
         return []
     if not isinstance(value, list):
@@ -103,12 +106,14 @@ def _as_string_list(value: object, source: str, key: str) -> list[str]:
 
 
 def _merge_list(target: list[str], values: list[str]) -> None:
+    """内部合并相邻或相关的数据块。"""
     for value in values:
         if value not in target:
             target.append(value)
 
 
 def _normalize_mode(mode: str, source: str) -> str:
+    """内部规范化消息结构。"""
     if mode not in SUPPORTED_PERMISSION_MODES:
         allowed = ", ".join(sorted(SUPPORTED_PERMISSION_MODES))
         raise ValueError(f"unsupported permission mode '{mode}' in {source}; expected one of: {allowed}")

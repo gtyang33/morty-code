@@ -122,6 +122,38 @@ def test_model_memory_extractor_filters_invalid_candidates() -> None:
     assert candidates[0].memory_type == "project"
 
 
+def test_model_memory_extractor_filters_process_noise() -> None:
+    model = JsonMemoryModel(
+        {
+            "memories": [
+                {
+                    "text": "Model provider error: request timed out after 120s",
+                    "target": "session",
+                    "topic": "error",
+                },
+                {
+                    "text": "让我先读取关键源码文件，以便写出完整总结文档。",
+                    "target": "session",
+                    "topic": "task",
+                },
+                {
+                    "text": "The user prefers concise Chinese answers.",
+                    "target": "durable",
+                    "type": "user",
+                    "topic": "preference",
+                },
+            ]
+        }
+    )
+    extractor = ModelMemoryExtractor(model)
+
+    candidates = asyncio.run(extractor.extract([assistant_message("done")]))
+
+    assert [candidate.text for candidate in candidates] == [
+        "The user prefers concise Chinese answers."
+    ]
+
+
 def test_model_memory_extractor_falls_back_when_model_fails() -> None:
     extractor = ModelMemoryExtractor(FailingMemoryModel(), fallback=FallbackExtractor())
 
@@ -152,3 +184,33 @@ def test_model_memory_extractor_falls_back_on_invalid_json() -> None:
             reason="fallback",
         )
     ]
+
+
+def test_model_memory_extractor_bounds_prompt_and_skips_tool_result_content() -> None:
+    model = JsonMemoryModel({"memories": []})
+    extractor = ModelMemoryExtractor(model, max_prompt_chars=500)
+    messages = [
+        Message(
+            uuid="tool-result",
+            timestamp="2026-05-15T00:00:00",
+            type="user",
+            payload={
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool-1",
+                        "content": "SECRET_OUTPUT\n" * 1000,
+                    }
+                ]
+            },
+        ),
+        assistant_message("Current task discovery: the migration path is now known."),
+    ]
+
+    asyncio.run(extractor.extract(messages))
+
+    prompt = str(model.last_messages[0]["content"])
+    assert len(prompt) <= 500
+    assert "SECRET_OUTPUT" not in prompt
+    assert "tool_result" not in prompt
+    assert "migration path is now known" in prompt

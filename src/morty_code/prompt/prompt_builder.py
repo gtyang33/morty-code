@@ -15,6 +15,7 @@ class PromptBuilder:
     """负责构建 cache-safe 三段上下文。"""
 
     def __init__(self, registry: PromptSectionRegistry) -> None:
+        """初始化对象状态。"""
         self.registry = registry
 
     async def build(
@@ -23,6 +24,7 @@ class PromptBuilder:
         model: str,
         runtime_state: dict[str, object],
     ) -> tuple[list[str], dict[str, str], dict[str, str]]:
+        """构建后续流程需要的数据。"""
         sections = [
             SystemPromptSection(
                 name="identity",
@@ -61,6 +63,7 @@ class PromptBuilder:
         self,
         context: ToolUseContext,
     ) -> tuple[list[str], dict[str, str], dict[str, str]]:
+        """构建后续流程需要的数据。"""
         system_prompt, user_context, system_context = await self.build(
             context.tools,
             context.model,
