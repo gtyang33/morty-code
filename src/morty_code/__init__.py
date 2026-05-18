@@ -35,6 +35,7 @@ from morty_code.runtime.query_engine import QueryEngine
 from morty_code.runtime.query_loop import QueryLoop
 from morty_code.security import load_permission_settings
 from morty_code.tools import NullToolRunner, ToolRunner, create_local_tool_registry
+from morty_code.tools.tool_result_formatter import format_tool_result_summary
 from morty_code.transcript.transcript_store import TranscriptStore
 from morty_code.types.messages import Message
 from morty_code.types.runtime_state import ContentReplacementState, ToolUseContext
@@ -571,35 +572,7 @@ def _render_single_tool_result(block: dict[str, object], *, verbose: bool) -> st
 
 def _summarize_tool_result(content: object) -> str:
     """内部压缩并总结上下文内容。"""
-    parsed = _parse_tool_result_payload(content)
-    if isinstance(parsed, dict):
-        if "entries" in parsed and "path" in parsed:
-            entries = parsed.get("entries")
-            count = len(entries) if isinstance(entries, list) else "unknown"
-            truncated = " (truncated)" if parsed.get("truncated") else ""
-            return f"list_dir {parsed.get('path')}: {count} entries{truncated}"
-        if "filenames" in parsed:
-            filenames = parsed.get("filenames")
-            if isinstance(filenames, list):
-                preview = ", ".join(str(item) for item in filenames[:5])
-                suffix = "" if len(filenames) <= 5 else f", ... +{len(filenames) - 5}"
-                return f"grep matched {len(filenames)} files: {preview}{suffix}"
-            return "grep matched files"
-        if "path" in parsed and "line_count" in parsed:
-            truncated = " (truncated)" if parsed.get("truncated") else ""
-            return f"read_file {parsed.get('path')}: {parsed.get('line_count')} lines{truncated}"
-        if "path" in parsed:
-            return f"{parsed.get('path')}"
-        if "output" in parsed:
-            return _truncate_text(str(parsed.get("output")), 240)
-        if "status" in parsed:
-            return str(parsed.get("status"))
-        return _truncate_text(_json_fallback(parsed), 240)
-    if isinstance(parsed, str):
-        if parsed.startswith("[Tool result ") and "was replaced" in parsed:
-            return "large result hidden; full content is kept in transcript/tool-results"
-        return _truncate_text(parsed, 240)
-    return _truncate_text(_json_fallback(parsed), 240)
+    return format_tool_result_summary(content, max_chars=240)
 
 
 def _parse_tool_result_payload(content: object) -> object:

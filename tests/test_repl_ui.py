@@ -225,6 +225,42 @@ class TestCliMessageRendering:
 
         assert rendered == "[tool:ok] list_dir /tmp/project: 1 entries"
 
+    def test_structured_tool_results_are_readable(self):
+        message = self._message(
+            "user",
+            [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "tool-1",
+                    "content": {
+                        "command": "grep -rn TOK_INSERT SemanticAnalyzer.java | head -20",
+                        "exit_code": 0,
+                        "timed_out": False,
+                        "stdout": "2394: if (...) TOK_INSERT\n2604: && !(...)",
+                        "stderr": "",
+                    },
+                },
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "tool-2",
+                    "content": {
+                        "path": "/repo/src/VMUtil.java",
+                        "content": "public class VMUtil {\n  // many lines\n}",
+                        "line_count": 437,
+                        "truncated": True,
+                    },
+                },
+            ],
+        )
+
+        rendered = _render_cli_message(message)
+
+        assert "[tool:ok] command=`grep -rn TOK_INSERT SemanticAnalyzer.java | head -20` exit=0" in rendered
+        assert "stdout: 2394: if (...) TOK_INSERT / 2604: && !(...)" in rendered
+        assert "[tool:ok] file=/repo/src/VMUtil.java lines=437 truncated" in rendered
+        assert "{'command':" not in rendered
+        assert "public class VMUtil" not in rendered
+
     def test_large_tool_result_replacement_is_hidden(self):
         message = self._message(
             "user",

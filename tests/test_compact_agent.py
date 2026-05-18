@@ -90,6 +90,48 @@ def test_compact_summary_sanitizes_large_tool_result_payloads() -> None:
     assert "small useful text" in summary
 
 
+def test_compact_summary_formats_tool_results_for_readability() -> None:
+    """验证 compact 摘要里的工具结果不会直接暴露原始 dict。"""
+
+    messages = [
+        _message(
+            "user",
+            [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call-grep",
+                    "content": {
+                        "command": "grep -rn TOK_INSERT SemanticAnalyzer.java | head -20",
+                        "exit_code": 0,
+                        "timed_out": False,
+                        "stdout": "2394: if (...) TOK_INSERT\n2604: && !(...)",
+                        "stderr": "",
+                    },
+                },
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call-file",
+                    "content": {
+                        "path": "/repo/src/VMUtil.java",
+                        "content": "public class VMUtil {\n  // many lines\n}",
+                        "line_count": 437,
+                        "truncated": True,
+                    },
+                },
+            ],
+        )
+    ]
+
+    summary_messages = asyncio.run(CompactAgent().summarize(messages))
+    summary = summary_messages[0].payload["summary"]
+
+    assert "call-grep ok: command=`grep -rn TOK_INSERT SemanticAnalyzer.java | head -20` exit=0" in summary
+    assert "stdout: 2394: if (...) TOK_INSERT / 2604: && !(...)" in summary
+    assert "call-file ok: file=/repo/src/VMUtil.java lines=437 truncated" in summary
+    assert "{'command':" not in summary
+    assert "'content': 'public class VMUtil" not in summary
+
+
 def test_compact_summary_skips_reinjected_attachments() -> None:
     """验证 compact 不总结 compact 后本来会重新注入的附件。"""
 

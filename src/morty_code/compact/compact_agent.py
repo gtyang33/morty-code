@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Protocol
 from uuid import uuid4
 
+from morty_code.tools.tool_result_formatter import format_tool_result_summary
 from morty_code.types.messages import Message
 
 
@@ -283,7 +284,7 @@ def _extract_tool_results(content: object) -> list[str]:
         result_content = block.get("content")
         status = "error" if block.get("is_error") else "ok"
         results.append(
-            f"{block.get('tool_use_id', '')} {status}: {_truncate(_stringify_content(result_content), 400)}"
+            f"{block.get('tool_use_id', '')} {status}: {format_tool_result_summary(result_content)}"
         )
     return results
 
