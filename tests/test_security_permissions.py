@@ -119,6 +119,33 @@ def test_plan_mode_blocks_mutating_tools() -> None:
     assert "plan mode" in decision.message
 
 
+def test_plan_mode_allows_writing_only_the_plan_file(tmp_path) -> None:
+    plan_path = tmp_path / ".morty" / "plans" / "session.md"
+    context = make_context(
+        mode="plan",
+        app_state={
+            "cwd": str(tmp_path),
+            "plan_mode": True,
+            "plan_file_path": str(plan_path),
+        },
+    )
+
+    allowed = evaluate_tool_permission(
+        "write_file",
+        {"path": ".morty/plans/session.md"},
+        context,
+    )
+    denied = evaluate_tool_permission(
+        "write_file",
+        {"path": "src/app.py"},
+        context,
+    )
+
+    assert allowed.behavior == "allow"
+    assert denied.behavior == "deny"
+    assert "only the plan file" in denied.message
+
+
 def test_tool_security_blocks_sensitive_writes_and_dangerous_bash(tmp_path) -> None:
     with pytest.raises(SecurityViolation):
         assert_safe_write_path(tmp_path, tmp_path / ".env")

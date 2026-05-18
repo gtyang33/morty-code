@@ -705,8 +705,6 @@ def _ensure_fresh_read(path: Path, context: ToolUseContext) -> None:
     state = context.read_file_state.get(str(path))
     if state is None:
         raise PermissionError("file must be read before write/edit")
-    if state.is_partial_view:
-        raise PermissionError("file was only partially read; read the full file before write/edit")
     current_mtime = path.stat().st_mtime * 1000
     if state.timestamp is not None and current_mtime > state.timestamp + 1:
         raise PermissionError("file changed since it was read; read it again before write/edit")

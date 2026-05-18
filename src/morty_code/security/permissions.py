@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from morty_code.security.shell_rules import rule_matches_bash_command, rule_matches_tool
@@ -24,8 +25,18 @@ class PermissionDecision:
 _MUTATING_TOOLS = {
     "write_file",
     "edit_file",
+    "append_file",
+    "multi_edit",
+    "move_path",
     "bash",
     "spawn_agent",
+}
+
+_PLAN_FILE_WRITE_TOOLS = {
+    "write_file",
+    "edit_file",
+    "append_file",
+    "multi_edit",
 }
 
 _SENSITIVE_TOOLS = {
@@ -86,12 +97,18 @@ def evaluate_tool_permission(
         return PermissionDecision("allow", "rule", f"Tool '{tool_name}' explicitly allowed{_rule_suffix(content_allow)}.")
 
     if mode == "plan" or bool(context.app_state.get("plan_mode", False)):
-        # plan mode 是只读规划状态，禁止写文件/执行命令/启动可能改动代码的子代理。
+        # Claude Code 的 plan mode 是“只读 + 只能写 plan file”。这允许模型
+        # 把最终计划写入专用文件，但仍阻止实现代码、命令和子代理改动系统。
         if tool_name in _MUTATING_TOOLS:
+            if tool_name in _PLAN_FILE_WRITE_TOOLS and _is_plan_file_write(tool_input, context):
+                return PermissionDecision("allow", "mode", "Plan mode allows writing the active plan file.")
             return PermissionDecision(
                 behavior="deny",
                 reason="mode",
-                message=f"Tool '{tool_name}' is blocked while plan mode is active.",
+                message=(
+                    f"Tool '{tool_name}' is blocked while plan mode is active; "
+                    "only the plan file may be written."
+                ),
             )
     if mode == "acceptEdits" and tool_name in _SENSITIVE_TOOLS:
         return PermissionDecision(
@@ -133,6 +150,25 @@ def _matches_content_rule(rules: set[str], tool_name: str, command: str) -> str 
         if rule_matches_bash_command(rule, command):
             return rule
     return None
+
+
+def _is_plan_file_write(tool_input: dict[str, Any], context: ToolUseContext) -> bool:
+    """判断写文件工具是否只指向当前 plan 文件。"""
+    raw_plan_path = context.app_state.get("plan_file_path")
+    raw_input_path = tool_input.get("path")
+    if not raw_plan_path or not raw_input_path:
+        return False
+    try:
+        plan_path = Path(str(raw_plan_path)).expanduser()
+        cwd = Path(str(context.app_state.get("cwd") or ".")).expanduser()
+        if not plan_path.is_absolute():
+            plan_path = cwd / plan_path
+        input_path = Path(str(raw_input_path)).expanduser()
+        if not input_path.is_absolute():
+            input_path = cwd / input_path
+        return input_path.resolve() == plan_path.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
 
 
 def _rule_suffix(rule: str | None) -> str:

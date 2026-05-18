@@ -178,14 +178,6 @@ class UserInputProcessor:
         )
         registry.register(
             CommandSpec(
-                name="plan-save",
-                description="写入当前 session 的计划文件",
-                kind="local",
-                handler=self._handle_plan_save,
-            )
-        )
-        registry.register(
-            CommandSpec(
                 name="plan-show",
                 description="显示当前 session 的计划文件",
                 kind="local",
@@ -326,35 +318,38 @@ class UserInputProcessor:
         tool_context = context["tool_context"]
         if not isinstance(tool_context, ToolUseContext):
             return {"mode": "local", "content": "Tool context unavailable."}
+        current_mode = str(tool_context.permission_mode or tool_context.app_state.get("permission_mode") or "default")
         plan_store = PlanStore.from_app_state(tool_context.app_state)
         plan_path = plan_store.ensure()
-        if args.strip():
-            plan_store.write(args.strip())
+        if current_mode != "plan":
+            tool_context.app_state["pre_plan_mode"] = current_mode
+        elif "pre_plan_mode" not in tool_context.app_state:
+            tool_context.app_state["pre_plan_mode"] = "default"
+        tool_context.permission_mode = "plan"
+        tool_context.app_state["permission_mode"] = "plan"
         tool_context.app_state["plan_mode"] = True
         tool_context.app_state["plan_file_path"] = str(plan_path)
         tool_context.app_state["approved_plan"] = None
         tool_context.app_state["last_plan_mode_attachment_turn"] = 0
+        if args.strip():
+            return {
+                "mode": "prompt",
+                "content": (
+                    "Plan mode is now active. Research the request and do not implement until the plan is approved. "
+                    "When your final plan is ready, ask the user whether to save it to the plan file. "
+                    f"If they want it saved, write only this plan file: {plan_path}.\n\n"
+                    f"User request: {args.strip()}"
+                ),
+            }
         return {
             "mode": "local",
             "content": (
                 "Plan mode enabled.\n"
                 f"Plan file: {plan_path}\n"
-                "Use /plan-save <markdown> to write the plan, then /auto to approve and exit."
+                "When the final plan is ready, the model should ask whether to save it to this file. "
+                "Use /auto to approve and exit plan mode."
             ),
         }
-
-    async def _handle_plan_save(self, args: str, context: dict[str, object]) -> dict[str, object]:
-        """内部处理该方法负责的业务逻辑。"""
-        tool_context = context["tool_context"]
-        if not isinstance(tool_context, ToolUseContext):
-            return {"mode": "local", "content": "Tool context unavailable."}
-        content = args.strip()
-        if not content:
-            return {"mode": "local", "content": "Usage: /plan-save <markdown plan>"}
-        plan_store = PlanStore.from_app_state(tool_context.app_state)
-        plan_path = plan_store.write(content)
-        tool_context.app_state["plan_file_path"] = str(plan_path)
-        return {"mode": "local", "content": f"Plan saved to {plan_path}."}
 
     async def _handle_plan_show(self, args: str, context: dict[str, object]) -> dict[str, object]:
         """内部处理该方法负责的业务逻辑。"""
@@ -373,24 +368,22 @@ class UserInputProcessor:
         if not isinstance(tool_context, ToolUseContext):
             return {"mode": "local", "content": "Tool context unavailable."}
         was_plan_mode = bool(tool_context.app_state.get("plan_mode", False))
+        plan_saved = False
         if was_plan_mode:
             plan_store = PlanStore.from_app_state(tool_context.app_state)
             plan = plan_store.read().strip()
-            if not plan:
-                return {
-                    "mode": "local",
-                    "content": (
-                        "Cannot exit plan mode: current plan file is empty.\n"
-                        f"Plan file: {plan_store.path}\n"
-                        "Use /plan-save <markdown> first."
-                    ),
-                }
+            plan_saved = bool(plan)
             tool_context.app_state["approved_plan"] = plan
             tool_context.app_state["plan_file_path"] = str(plan_store.path)
+        restore_mode = str(tool_context.app_state.get("pre_plan_mode") or "default")
+        tool_context.permission_mode = restore_mode
+        tool_context.app_state["permission_mode"] = restore_mode
+        tool_context.app_state["pre_plan_mode"] = None
         tool_context.app_state["plan_mode"] = False
         if was_plan_mode:
             tool_context.app_state["needs_plan_mode_exit_attachment"] = True
-        return {"mode": "local", "content": "Plan approved. Auto mode enabled."}
+        saved_suffix = "" if plan_saved else " No plan file was saved."
+        return {"mode": "local", "content": f"Plan approved. Restored permission mode: {restore_mode}.{saved_suffix}"}
 
     async def _handle_compact(self, args: str, context: dict[str, object]) -> dict[str, object]:
         """内部处理该方法负责的业务逻辑。"""

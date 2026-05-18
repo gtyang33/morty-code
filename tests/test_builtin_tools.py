@@ -94,6 +94,27 @@ def test_multi_edit_requires_fresh_read_and_applies_edits(tmp_path) -> None:
     assert "BETA" in context.read_file_state[str(path)].content
 
 
+def test_edit_file_allows_partial_read_when_old_string_is_unique(tmp_path) -> None:
+    path = tmp_path / "large.txt"
+    path.write_text("header\nTARGET = 1\n" + "tail\n" * 100, encoding="utf-8")
+    context = make_context()
+
+    run_tool(tmp_path, "read_file", {"path": "large.txt", "offset": 0, "limit": 2}, context)
+    result = run_tool(
+        tmp_path,
+        "edit_file",
+        {
+            "path": "large.txt",
+            "old_string": "TARGET = 1",
+            "new_string": "TARGET = 2",
+        },
+        context,
+    )
+
+    assert result["replacements"] == 1
+    assert "TARGET = 2" in path.read_text(encoding="utf-8")
+
+
 def test_multi_edit_rejects_ambiguous_replacement(tmp_path) -> None:
     path = tmp_path / "example.txt"
     path.write_text("same same", encoding="utf-8")

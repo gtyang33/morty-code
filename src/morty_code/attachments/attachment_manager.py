@@ -70,7 +70,11 @@ class AttachmentManager:
             Attachment(
                 type="plan_mode",
                 payload={
-                    "content": "Plan mode is active. Explore and update the plan file only; do not implement until /auto approves the plan.",
+                    "content": (
+                        "Plan mode is active. Do not implement until /auto approves the plan. "
+                        "When the final plan is ready, ask the user whether to save it to the plan file; "
+                        "if yes, write only that plan file."
+                    ),
                     "plan_file_path": str(plan_path),
                     "plan": plan_store.read().strip(),
                 },
@@ -172,7 +176,10 @@ class AttachmentManager:
                 Attachment(
                     type="plan_mode",
                     payload={
-                        "content": "Plan mode is active after compaction. Do not modify files until the plan is approved.",
+                        "content": (
+                            "Plan mode is active after compaction. Do not implement until the plan is approved. "
+                            "Ask whether to save the final plan to the plan file before writing it."
+                        ),
                         "plan_file_path": str(plan_path),
                         "plan": plan_store.read().strip(),
                         "source": "post_compact_reinject",
@@ -364,7 +371,10 @@ class AttachmentManager:
             Attachment(
                 type="plan_mode",
                 payload={
-                    "content": "Plan mode is active. Do not modify files until the plan is approved.",
+                    "content": (
+                        "Plan mode is active. Do not implement until the plan is approved. "
+                        "Ask whether to save the final plan to the plan file before writing it."
+                    ),
                     "plan_file_path": str(plan_path),
                     "plan": plan_store.read().strip(),
                     "turn_index": turn_index,

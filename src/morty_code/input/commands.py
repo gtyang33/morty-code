@@ -18,7 +18,7 @@ class CommandSpec:
     aliases: list[str] = field(default_factory=list)
     user_invocable: bool = True
     model_invocable: bool = True
-    allowed_tools: list[str] = field(default_factory=list)
+    allowed_tools: list[str] | None = None
     model: str | None = None
     effort: str | None = None
 

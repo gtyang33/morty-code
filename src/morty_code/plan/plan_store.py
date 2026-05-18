@@ -32,11 +32,11 @@ class PlanStore:
         return self.plans_dir / f"{slug}.md"
 
     def ensure(self) -> Path:
-        # 进入 plan mode 时先创建空文件，方便用户或模型随后通过工具增量写入。
+        # 进入 plan mode 时只创建目录，不预创建空文件。这样模型可以像
+        # Claude Code 一样用 write_file 创建 plan file，而不会被“必须先读
+        # 已存在文件”的 stale-write 保护卡住。
         """确保依赖资源处于可用状态。"""
         self.plans_dir.mkdir(parents=True, exist_ok=True)
-        if not self.path.exists():
-            self.path.write_text("", encoding="utf-8")
         return self.path
 
     def read(self) -> str:
