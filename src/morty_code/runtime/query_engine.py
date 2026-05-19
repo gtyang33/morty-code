@@ -12,6 +12,7 @@ from morty_code.compact.compact_rebuild import (
     build_reinjection_attachments,
     rebuild_post_compact_messages,
 )
+from morty_code.agents.task_notifications import drain_task_notifications
 from morty_code.memory.durable_memory import DurableMemoryStore
 from morty_code.memory.memory_extractor import MemoryExtractor
 from morty_code.memory.session_memory import SessionMemoryStore
@@ -19,7 +20,7 @@ from morty_code.runtime.queue_manager import QueueManager
 from morty_code.transcript.conversation_recovery import ConversationRecovery
 from morty_code.transcript.session_restore import SessionRestore
 from morty_code.types.messages import Message
-from morty_code.types.runtime_state import CacheSafeParams, ToolUseContext
+from morty_code.types.runtime_state import CacheSafeParams, QueuedCommand, ToolUseContext
 
 
 class QueryEngine:
@@ -70,6 +71,40 @@ class QueryEngine:
             mode="prompt",
             pasted_contents=pasted_contents,
         )
+        return await self._submit_queued_commands(
+            raw_input=raw_input,
+            queued_commands=queued_commands,
+            tool_context=tool_context,
+            on_new_messages=on_new_messages,
+        )
+
+    async def submit_pending_notifications(
+        self,
+        tool_context: ToolUseContext,
+        on_new_messages: Callable[[list[Message]], None] | None = None,
+    ) -> list[Message]:
+        """处理后台任务通知，不需要伪造用户输入。"""
+
+        queued_commands = drain_task_notifications(tool_context.app_state)
+        if not queued_commands:
+            return []
+        return await self._submit_queued_commands(
+            raw_input="",
+            queued_commands=queued_commands,
+            tool_context=tool_context,
+            on_new_messages=on_new_messages,
+        )
+
+    async def _submit_queued_commands(
+        self,
+        *,
+        raw_input: str,
+        queued_commands: list[QueuedCommand],
+        tool_context: ToolUseContext,
+        on_new_messages: Callable[[list[Message]], None] | None = None,
+    ) -> list[Message]:
+        """提交已经归一化的队列命令，统一处理用户输入和后台通知。"""
+
         self.queue_manager.extend(queued_commands)
         queued_commands = self.queue_manager.drain()
         await self.transcript_store.append_event(
@@ -226,6 +261,19 @@ class QueryEngine:
                 raw_input,
                 tool_context,
                 pasted_contents,
+                on_new_messages=on_new_messages,
+            )
+        )
+
+    def submit_pending_notifications_sync(
+        self,
+        tool_context: ToolUseContext,
+        on_new_messages: Callable[[list[Message]], None] | None = None,
+    ) -> list[Message]:
+        """同步处理后台任务通知，供 CLI 空闲 pump 调用。"""
+        return asyncio.run(
+            self.submit_pending_notifications(
+                tool_context,
                 on_new_messages=on_new_messages,
             )
         )

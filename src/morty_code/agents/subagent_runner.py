@@ -20,6 +20,7 @@ class SubagentRunResult:
     agent_id: str
     agent_type: str
     output: str
+    output_file: str | None
     message_count: int
     transcript_path: str | None
     metadata_events: list[dict[str, object]]
@@ -52,6 +53,7 @@ class SubagentRunner:
         parent_cache_safe: CacheSafeParams,
         max_turns: int | None = None,
         agent_id: str | None = None,
+        output_file: str | None = None,
         record_transcript: bool = True,
     ) -> SubagentRunResult:
         """执行核心流程。"""
@@ -112,6 +114,7 @@ class SubagentRunner:
                 parent_context.app_state.pop("tool_schemas", None)
 
         output = self._extract_final_output(result.messages)
+        clean_output_file = self._write_clean_output_file(parent_context, resolved_agent_id, output, output_file)
         status = "completed" if output or result.messages else "failed"
         metadata_events = [
             {
@@ -122,6 +125,7 @@ class SubagentRunner:
                 "status": status,
                 "message_count": len(result.messages),
                 "tool_count": len(allowed_tools),
+                "output_file": clean_output_file,
                 "transcript_path": str(transcript_store.path) if transcript_store else None,
             },
             *result.metadata_events,
@@ -144,6 +148,7 @@ class SubagentRunner:
             agent_id=resolved_agent_id,
             agent_type=definition.agent_type,
             output=output,
+            output_file=clean_output_file,
             message_count=len(result.messages),
             transcript_path=str(transcript_store.path) if transcript_store else None,
             metadata_events=metadata_events,
@@ -217,6 +222,21 @@ class SubagentRunner:
         root = Path(str(parent_context.app_state.get("subagent_transcripts_dir") or ".morty/subagents"))
         path = root / session_id / f"{agent_id}.jsonl"
         return TranscriptStore(path, agent_id)
+
+    def _write_clean_output_file(
+        self,
+        parent_context: ToolUseContext,
+        agent_id: str,
+        output: str,
+        output_file: str | None,
+    ) -> str | None:
+        """把子代理最终答复写成干净文本文件，避免父代理读取 JSONL transcript。"""
+
+        root = Path(str(parent_context.app_state.get("subagent_tasks_dir") or ".morty/tasks"))
+        path = Path(output_file) if output_file else root / f"{agent_id}.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(output, encoding="utf-8")
+        return str(path)
 
     async def _append_lifecycle_event(
         self,

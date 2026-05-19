@@ -523,7 +523,12 @@ def create_local_tool_registry(
             ),
             ToolSpec(
                 name="write_file",
-                description="Create or overwrite a UTF-8 file under the workspace root. Existing files must be read first.",
+                description="Create or overwrite a UTF-8 file under the workspace root.",
+                prompt=(
+                    "Create or overwrite a UTF-8 file under the workspace root. Existing files must be read first. "
+                    "Prefer edit_file or multi_edit for modifying existing files; use write_file for new files "
+                    "or complete rewrites."
+                ),
                 handler=write_file,
                 needs_context=True,
                 input_schema={
@@ -551,7 +556,12 @@ def create_local_tool_registry(
             ),
             ToolSpec(
                 name="edit_file",
-                description="Replace exact text in a file under the workspace root. File must be read first.",
+                description="Replace exact text in a file under the workspace root.",
+                prompt=(
+                    "Replace exact text in a file under the workspace root. Use read_file first. "
+                    "The old_string must be unique unless replace_all=true; include enough surrounding context "
+                    "to identify one target."
+                ),
                 handler=edit_file,
                 needs_context=True,
                 input_schema={
@@ -567,7 +577,11 @@ def create_local_tool_registry(
             ),
             ToolSpec(
                 name="multi_edit",
-                description="Apply multiple exact text replacements to a file under the workspace root. File must be read first.",
+                description="Apply multiple exact text replacements to a file under the workspace root.",
+                prompt=(
+                    "Apply several exact replacements to a file under the workspace root. Use read_file first. "
+                    "Prefer this over bash, sed, python, or perl scripts when changing multiple snippets in one file."
+                ),
                 handler=multi_edit,
                 needs_context=True,
                 input_schema={
@@ -607,6 +621,25 @@ def create_local_tool_registry(
             ToolSpec(
                 name="bash",
                 description="Run a shell command in the workspace root and return stdout/stderr.",
+                prompt=(
+                    "Run a shell command in the workspace root and return stdout/stderr.\n\n"
+                    "Use bash for:\n"
+                    "- Run tests and builds, such as uv run pytest, npm test, mvn test, cargo build.\n"
+                    "- Run project CLIs, package scripts, local servers, and diagnostics.\n"
+                    "- Run git commands, process inspection, and environment inspection.\n\n"
+                    "Use dedicated tools instead of bash:\n"
+                    "- File search: use glob_files, not find or ls.\n"
+                    "- Content search: use grep_text, not grep, rg, sed, or awk.\n"
+                    "- Read files: use read_file, not cat, head, tail, or sed -n.\n"
+                    "- Edit existing files: use edit_file or multi_edit, not sed -i, perl -pi, awk, "
+                    "python -c, python3 -c, or ad-hoc rewrite scripts.\n"
+                    "- Write new files or full rewrites: use write_file, not echo redirection, tee, "
+                    "cat <<EOF, or other heredoc forms.\n"
+                    "- Append long generated documents in chunks: use append_file.\n\n"
+                    "Do not use sed -i, python3 -c, python -c, perl -pi, awk, echo redirection, "
+                    "tee, or heredoc to edit files. Do not create Python scripts just to rewrite files; "
+                    "use edit_file/multi_edit/write_file instead."
+                ),
                 handler=bash,
                 needs_context=True,
                 input_schema={

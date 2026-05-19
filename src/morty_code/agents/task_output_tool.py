@@ -94,6 +94,9 @@ async def _wait_for_task(task_registry, task_id: str, timeout_ms: int) -> Subage
 def _format_task(task: SubagentTask, retrieval_status: str) -> dict[str, object]:
     """内部格式化输出内容。"""
     payload = asdict(task)
+    # transcript_path/state_file 是诊断与持久化细节，不作为模型读取子代理结果的正常入口。
+    payload.pop("transcript_path", None)
+    payload.pop("state_file", None)
     return {
         "retrieval_status": retrieval_status,
         "task": payload,

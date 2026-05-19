@@ -50,8 +50,6 @@ _DANGEROUS_COMMANDS = {
 _DANGEROUS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"`"), "backtick command substitution"),
     (re.compile(r"\$\("), "$() command substitution"),
-    (re.compile(r"<\("), "process substitution <()"),
-    (re.compile(r">\("), "process substitution >()"),
     (re.compile(r"\$\{"), "${} shell expansion"),
     (re.compile(r"\|\s*(sh|bash|zsh)\b"), "pipe to shell"),
     (re.compile(r"\b(curl|wget)\b[^|;&]*\|\s*(sh|bash|zsh)\b"), "download and execute"),
@@ -98,6 +96,9 @@ def assert_safe_bash_command(
         return
     # 先用正则拦截最常见的灾难性命令，再用 shlex 拆分后逐段检查。
     # 这不是完整 shell parser，但能覆盖本地 agent 最容易误触的高风险操作。
+    process_substitution = _find_unquoted_process_substitution(command)
+    if process_substitution:
+        raise SecurityViolation(f"blocked bash command: process substitution {process_substitution}")
     for pattern, reason in _DANGEROUS_PATTERNS:
         if pattern.search(command):
             raise SecurityViolation(f"blocked bash command: {reason}")
@@ -134,6 +135,31 @@ def _split_command_segments(tokens: list[str]) -> list[list[str]]:
             continue
         segments[-1].append(token)
     return segments
+
+
+def _find_unquoted_process_substitution(command: str) -> str | None:
+    """只在 shell 语法层面识别 <(...) / >(...)，忽略引号里的文本。"""
+    quote: str | None = None
+    escaped = False
+    for index, char in enumerate(command[:-1]):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if quote:
+            if char == quote:
+                quote = None
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            continue
+        if char == "<" and command[index + 1] == "(":
+            return "<()"
+        if char == ">" and command[index + 1] == "(":
+            return ">()"
+    return None
 
 
 def _check_removal(args: list[str], root: Path) -> None:

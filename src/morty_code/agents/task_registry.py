@@ -23,6 +23,7 @@ class SubagentTask:
     prompt: str
     status: TaskStatus
     output_file: str
+    state_file: str
     transcript_path: str | None = None
     output: str = ""
     error: str = ""
@@ -56,7 +57,8 @@ class SubagentTaskRegistry:
         prompt: str,
     ) -> SubagentTask:
         """创建新的运行对象或记录。"""
-        output_file = str(self.root / f"{task_id}.json")
+        output_file = str(self.root / f"{task_id}.txt")
+        state_file = str(self.root / f"{task_id}.json")
         task = SubagentTask(
             task_id=task_id,
             agent_id=agent_id,
@@ -65,6 +67,7 @@ class SubagentTaskRegistry:
             prompt=prompt,
             status="running",
             output_file=output_file,
+            state_file=state_file,
             process_id=os.getpid(),
         )
         self.update(task)
@@ -78,11 +81,14 @@ class SubagentTaskRegistry:
             task.heartbeat_at = now
         with self._lock:
             self._tasks[task.task_id] = task
-            Path(task.output_file).parent.mkdir(parents=True, exist_ok=True)
-            Path(task.output_file).write_text(
+            Path(task.state_file).parent.mkdir(parents=True, exist_ok=True)
+            # state_file 保存机器可读状态；output_file 只保存父 agent 应读取的干净结果。
+            Path(task.state_file).write_text(
                 json.dumps(asdict(task), ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+            Path(task.output_file).parent.mkdir(parents=True, exist_ok=True)
+            Path(task.output_file).write_text(_format_clean_output(task), encoding="utf-8")
 
     def get(self, task_id: str) -> SubagentTask | None:
         """获取运行所需数据。"""
@@ -190,7 +196,27 @@ def get_subagent_task_registry(root: str | Path = ".morty/tasks") -> SubagentTas
 def _task_from_payload(payload: dict[str, object]) -> SubagentTask:
     """内部处理该方法负责的业务逻辑。"""
     allowed = set(SubagentTask.__dataclass_fields__)
+    if "state_file" not in payload:
+        task_id = str(payload.get("task_id") or "")
+        output_file = Path(str(payload.get("output_file") or "")) if payload.get("output_file") else Path(task_id)
+        if output_file.suffix == ".json" and task_id:
+            payload["output_file"] = str(output_file.with_name(f"{task_id}.txt"))
+            state_file = output_file
+        elif task_id:
+            state_file = output_file.with_name(f"{task_id}.json")
+        else:
+            state_file = output_file
+        payload["state_file"] = str(state_file)
     return SubagentTask(**{key: value for key, value in payload.items() if key in allowed})
+
+
+def _format_clean_output(task: SubagentTask) -> str:
+    """格式化父代理应读取的干净任务结果。"""
+    if task.output:
+        return task.output
+    if task.error:
+        return task.error
+    return f"Task {task.task_id} is {task.status}."
 
 
 def _pid_is_alive(pid: int) -> bool:

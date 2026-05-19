@@ -85,6 +85,8 @@ class OpenAICompatibleModelClient:
         )
         # 普通 OpenAI Chat 网关可能拒绝 cache_control；默认只在 runtime 内部规划。
         self.send_cache_control = os.environ.get("MORTY_SEND_CACHE_CONTROL") == "1"
+        # 默认启用 OpenAI-compatible SSE streaming；外部接口仍返回完整 Message。
+        self.streaming = os.environ.get("MORTY_STREAMING", "1") != "0"
 
     async def respond(
         self,
@@ -105,16 +107,16 @@ class OpenAICompatibleModelClient:
             },
             *messages,
         ])
+        request_body = self._build_request_body(
+            model=self.model,
+            wire_messages=wire_messages,
+            system_context=system_context,
+            stream=self.streaming,
+        )
         body = json.dumps(
-            self._build_request_body(
-                model=self.model,
-                wire_messages=wire_messages,
-                system_context=system_context,
-            ),
+            request_body,
             ensure_ascii=False,
         ).encode("utf-8")
-        # 标准库 urllib 是同步阻塞 API，但外层仍保持 async 接口，方便以后替换
-        # 成真正的 streaming/httpx client 时不改变 QueryLoop 协议。
         request = urllib.request.Request(
             url=f"{self.base_url}/chat/completions",
             data=body,
@@ -126,7 +128,10 @@ class OpenAICompatibleModelClient:
         )
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+                if self.streaming:
+                    payload = self._read_streaming_payload(response)
+                else:
+                    payload = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             # HTTP 错误保留 status/detail/retry-after，QueryLoop 会基于这些字段
             # 决定是否重试、是否降级 cache_control。
@@ -166,17 +171,107 @@ class OpenAICompatibleModelClient:
         model: str,
         wire_messages: list[dict[str, object]],
         system_context: dict[str, str],
+        stream: bool | None = None,
     ) -> dict[str, object]:
         """内部构建后续流程需要的数据。"""
         body: dict[str, object] = {
             "model": model,
             "messages": wire_messages,
         }
+        if stream:
+            body["stream"] = True
         tool_schemas_json = system_context.get("tool_schemas_json")
         if tool_schemas_json:
             tools = json.loads(tool_schemas_json)
             body["tools"] = tools if self.send_cache_control else self._strip_cache_fields(tools)
         return body
+
+    def _read_streaming_payload(self, response) -> dict[str, object]:
+        """读取 OpenAI-compatible SSE 流，并组装成非流式 payload 形态。"""
+        content_parts: list[str] = []
+        tool_calls_by_index: dict[int, dict[str, object]] = {}
+        usage: dict[str, object] | None = None
+        while True:
+            raw_line = response.readline()
+            if not raw_line:
+                break
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            if not line or line.startswith(":"):
+                continue
+            if not line.startswith("data:"):
+                continue
+            data = line[len("data:") :].strip()
+            if data == "[DONE]":
+                break
+            try:
+                event = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event.get("usage"), dict):
+                usage = event["usage"]
+            choices = event.get("choices") or []
+            if not isinstance(choices, list) or not choices:
+                continue
+            choice = choices[0]
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta") or {}
+            if not isinstance(delta, dict):
+                continue
+            if delta.get("content"):
+                content_parts.append(str(delta["content"]))
+            tool_calls = delta.get("tool_calls") or []
+            if isinstance(tool_calls, list):
+                for tool_call_delta in tool_calls:
+                    if isinstance(tool_call_delta, dict):
+                        self._accumulate_tool_call_delta(tool_calls_by_index, tool_call_delta)
+        message: dict[str, object] = {}
+        content = "".join(content_parts)
+        if content:
+            message["content"] = content
+        if tool_calls_by_index:
+            message["tool_calls"] = [
+                tool_calls_by_index[index]
+                for index in sorted(tool_calls_by_index)
+            ]
+        payload: dict[str, object] = {"choices": [{"message": message}]}
+        if usage is not None:
+            payload["usage"] = usage
+        return payload
+
+    def _accumulate_tool_call_delta(
+        self,
+        calls_by_index: dict[int, dict[str, object]],
+        delta: dict[str, object],
+    ) -> None:
+        """合并 streaming tool_calls 分片，尤其是增量 arguments 字符串。"""
+        try:
+            index = int(delta.get("index", 0))
+        except (TypeError, ValueError):
+            index = 0
+        current = calls_by_index.setdefault(
+            index,
+            {
+                "id": str(delta.get("id") or uuid4()),
+                "type": str(delta.get("type") or "function"),
+                "function": {"name": "", "arguments": ""},
+            },
+        )
+        if delta.get("id"):
+            current["id"] = str(delta["id"])
+        if delta.get("type"):
+            current["type"] = str(delta["type"])
+        function_delta = delta.get("function") or {}
+        if not isinstance(function_delta, dict):
+            return
+        function = current.setdefault("function", {"name": "", "arguments": ""})
+        if not isinstance(function, dict):
+            function = {"name": "", "arguments": ""}
+            current["function"] = function
+        if function_delta.get("name"):
+            function["name"] = str(function_delta["name"])
+        if function_delta.get("arguments"):
+            function["arguments"] = str(function.get("arguments") or "") + str(function_delta["arguments"])
 
     def _message_from_choice(self, choice: dict[str, object]) -> Message:
         """内部处理该方法负责的业务逻辑。"""

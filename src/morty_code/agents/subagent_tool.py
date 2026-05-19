@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from morty_code.agents.agent_definitions import load_project_agents
 from morty_code.agents.subagent_runner import SubagentRunner
+from morty_code.agents.task_notifications import enqueue_task_notification
 from morty_code.agents.task_registry import get_subagent_task_registry
 from morty_code.tools.tool_registry import ToolRegistry, ToolSpec
 from morty_code.types.runtime_state import (
@@ -66,15 +67,21 @@ def register_subagent_tool(query_loop, registry: ToolRegistry) -> None:
             "agent_id": result.agent_id,
             "agent_type": result.agent_type,
             "output": result.output,
+            "output_file": result.output_file,
             "message_count": result.message_count,
-            "transcript_path": result.transcript_path,
-            "metadata_events": result.metadata_events,
         }
 
     registry.register(
         ToolSpec(
             name="spawn_agent",
             description="Delegate a bounded task to an isolated subagent and return its concise result.",
+            prompt=(
+                "Delegate a bounded task to an isolated subagent and return its concise result.\n\n"
+                "Use the returned output or output_file as the authoritative subagent result. "
+                "If the result is long, read output_file with read_file.\n\n"
+                "Do not read .morty/subagents for normal task results. "
+                "Do not parse transcript JSONL with bash, cat, sed, or Python; transcripts are diagnostic-only."
+            ),
             handler=spawn_agent,
             needs_context=True,
             input_schema={
@@ -95,7 +102,7 @@ def register_subagent_tool(query_loop, registry: ToolRegistry) -> None:
                     },
                     "run_in_background": {
                         "type": "boolean",
-                        "description": "Launch the subagent in the background and return an output file.",
+                        "description": "Launch the subagent in the background and return a clean output file path.",
                         "default": False,
                     },
                     "max_turns": {
@@ -158,15 +165,34 @@ def _launch_background_agent(
                     parent_cache_safe=background_cache_safe,
                     max_turns=max_turns,
                     agent_id=agent_id,
+                    output_file=task.output_file,
                     record_transcript=True,
                 )
             )
             task.status = "completed"
             task.output = result.output
             task.transcript_path = result.transcript_path
+            registry.update(task)
+            enqueue_task_notification(
+                context.app_state,
+                task_id=task.task_id,
+                output_file=task.output_file,
+                description=task.description,
+                status="completed",
+                final_message=result.output,
+            )
         except Exception as exc:  # noqa: BLE001 - 后台任务失败要落盘给父 agent 查询。
             task.status = "failed"
             task.error = str(exc)
+            registry.update(task)
+            enqueue_task_notification(
+                context.app_state,
+                task_id=task.task_id,
+                output_file=task.output_file,
+                description=task.description,
+                status="failed",
+                error=task.error,
+            )
         finally:
             registry.update(task)
 
@@ -179,7 +205,6 @@ def _launch_background_agent(
         "agent_type": task.agent_type,
         "description": task.description,
         "output_file": task.output_file,
-        "transcript_path": task.transcript_path,
     }
 
 

@@ -4,6 +4,7 @@ import asyncio
 import json
 
 from morty_code.api.errors import ModelProviderError
+from morty_code.agents.task_notifications import enqueue_task_notification
 from morty_code.runtime.query_loop import QueryLoop
 from morty_code.tools.tool_registry import ToolRegistry, ToolSpec
 from morty_code.tools.tool_runner import ToolRunner
@@ -159,6 +160,37 @@ def test_query_loop_emits_live_messages_during_tool_iterations() -> None:
     assert emitted[0] == ["assistant-tool"]
     assert len(emitted[1]) == 1
     assert emitted[2][-1] == "assistant-final"
+
+
+def test_query_loop_injects_pending_task_notifications_after_iteration(tmp_path) -> None:
+    registry = ToolRegistry([])
+    context = ToolUseContext(
+        tools=[],
+        model="test-model",
+        permission_mode="default",
+        app_state={},
+        read_file_state={},
+        content_replacement_state=ContentReplacementState(),
+    )
+    enqueue_task_notification(
+        context.app_state,
+        task_id="task-1",
+        output_file=str(tmp_path / "task.txt"),
+        description="Review code",
+        status="completed",
+        final_message="done",
+    )
+    cache = CacheSafeParams(system_prompt=[], user_context={}, system_context={}, messages=[])
+    loop = QueryLoop(ToolThenFinalModel(), ToolRunner(registry), max_iterations=1)
+
+    result = asyncio.run(loop.run([], cache, context))
+
+    attachment = result.new_messages[-1]
+    assert attachment.payload["attachment_type"] == "queued_command"
+    assert attachment.payload["mode"] == "task-notification"
+    assert "<task-notification>" in str(attachment.payload["prompt"])
+    assert "<result>done</result>" in str(attachment.payload["prompt"])
+    assert context.app_state["task_notification_queue"] == []
 
 
 def test_query_loop_dumps_prompt_when_model_provider_fails(tmp_path, monkeypatch) -> None:

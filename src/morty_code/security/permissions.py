@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import shlex
 from typing import Any
 
 from morty_code.security.shell_rules import rule_matches_bash_command, rule_matches_tool
@@ -122,6 +123,17 @@ def evaluate_tool_permission(
             reason="mode",
             message=f"Tool '{tool_name}' is blocked by dontAsk mode.",
         )
+    if tool_name == "bash" and command:
+        file_edit_intent = detect_bash_file_edit_intent(command)
+        if file_edit_intent:
+            return PermissionDecision(
+                behavior="ask",
+                reason="bash_file_edit_intent",
+                message=(
+                    "This bash command looks like a file edit. Prefer "
+                    f"edit_file/multi_edit/write_file instead ({file_edit_intent})."
+                ),
+            )
 
     return PermissionDecision("allow", "default", "Tool allowed by default policy.")
 
@@ -150,6 +162,60 @@ def _matches_content_rule(rules: set[str], tool_name: str, command: str) -> str 
         if rule_matches_bash_command(rule, command):
             return rule
     return None
+
+
+def detect_bash_file_edit_intent(command: str) -> str | None:
+    """识别 Bash 中容易和结构化编辑工具混淆的文件写入意图。"""
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        return None
+    for index, token in enumerate(tokens):
+        executable = Path(token).name
+        args = tokens[index + 1 :]
+        next_token = tokens[index + 1] if index + 1 < len(tokens) else ""
+        if executable == "sed" and any(arg == "-i" or arg.startswith("-i") for arg in args):
+            return "sed in-place edit"
+        if executable == "perl" and any("i" in arg.lstrip("-") for arg in args if arg.startswith("-")):
+            return "perl in-place edit"
+        if executable in {"python", "python3"} and next_token and not next_token.startswith("-"):
+            if Path(next_token).name.endswith(".py"):
+                return f"{executable} script"
+        if executable == "tee" and any(not arg.startswith("-") for arg in args):
+            return "tee file write"
+    if _has_unquoted_output_redirection(command):
+        return "shell output redirection"
+    return None
+
+
+def _has_unquoted_output_redirection(command: str) -> bool:
+    """只在 shell 语法层面识别 > / >>，忽略引号里的文本和 process substitution。"""
+    quote: str | None = None
+    escaped = False
+    for index, char in enumerate(command):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if quote:
+            if char == quote:
+                quote = None
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            continue
+        if char != ">":
+            continue
+        previous_char = command[index - 1] if index > 0 else ""
+        next_char = command[index + 1] if index + 1 < len(command) else ""
+        if next_char == "(":
+            continue
+        if previous_char == "&":
+            continue
+        return True
+    return False
 
 
 def _is_plan_file_write(tool_input: dict[str, Any], context: ToolUseContext) -> bool:

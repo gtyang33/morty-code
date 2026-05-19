@@ -16,6 +16,7 @@ from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.lexers import Lexer
+from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.styles import Style
 
 from morty_code.api.model_client import EchoModelClient, OpenAICompatibleModelClient
@@ -28,6 +29,7 @@ from morty_code.input.process_user_input import UserInputProcessor
 from morty_code.harness import run_stream_json_harness
 from morty_code.memory.memory_extractor import MemoryExtractor
 from morty_code.memory.model_memory_extractor import ModelMemoryExtractor
+from morty_code.agents.task_notifications import has_task_notifications
 from morty_code.agents.task_registry import get_subagent_task_registry
 from morty_code.prompt.prompt_builder import PromptBuilder
 from morty_code.prompt.prompt_sections import PromptSectionRegistry
@@ -372,33 +374,83 @@ def main() -> None:
         style=_MORTY_STYLE,
     )
     spinner = _Spinner()
+    turn_lock = threading.Lock()
+    stop_notification_pump = threading.Event()
+    notification_thread = _start_task_notification_pump(
+        engine,
+        tool_context,
+        turn_lock=turn_lock,
+        stop_event=stop_notification_pump,
+    )
 
-    while True:
-        try:
-            raw = session.prompt(
-                FormattedText([("class:slash", "morty-code"), ("", "> ")]),
-            ).strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return
-        if raw in {"/exit", "/quit"}:
-            return
-        if not raw:
-            continue
-        spinner.start("thinking")
-        try:
-            live_print, printed_ids = _make_live_printer(spinner=spinner)
-            messages = engine.submit_message_sync(
-                raw,
-                tool_context,
-                on_new_messages=live_print,
-            )
-        finally:
-            spinner.stop()
-        for message in messages:
-            if message.uuid in printed_ids:
+    try:
+        with patch_stdout():
+            while True:
+                try:
+                    raw = session.prompt(
+                        FormattedText([("class:slash", "morty-code"), ("", "> ")]),
+                    ).strip()
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    return
+                if raw in {"/exit", "/quit"}:
+                    return
+                if not raw:
+                    continue
+                spinner.start("thinking")
+                try:
+                    live_print, printed_ids = _make_live_printer(spinner=spinner)
+                    with turn_lock:
+                        messages = engine.submit_message_sync(
+                            raw,
+                            tool_context,
+                            on_new_messages=live_print,
+                        )
+                finally:
+                    spinner.stop()
+                for message in messages:
+                    if message.uuid in printed_ids:
+                        continue
+                    _print_cli_message(message)
+    finally:
+        stop_notification_pump.set()
+        notification_thread.join(timeout=1)
+
+
+def _start_task_notification_pump(
+    engine: QueryEngine,
+    tool_context: ToolUseContext,
+    *,
+    turn_lock: threading.Lock,
+    stop_event: threading.Event,
+    interval: float = 0.2,
+) -> threading.Thread:
+    """启动后台任务通知 pump，让异步 agent 完成后能自动回灌主会话。"""
+
+    def _pump() -> None:
+        while not stop_event.wait(interval):
+            if not has_task_notifications(tool_context.app_state):
                 continue
-            _print_cli_message(message)
+            if not turn_lock.acquire(blocking=False):
+                continue
+            try:
+                live_print, printed_ids = _make_live_printer()
+                messages = engine.submit_pending_notifications_sync(
+                    tool_context,
+                    on_new_messages=live_print,
+                )
+                for message in messages:
+                    if message.uuid in printed_ids:
+                        continue
+                    _print_cli_message(message)
+            except Exception as exc:  # noqa: BLE001 - pump 不能杀死 REPL 主循环。
+                print(f"[task-notification:error] {exc}")
+            finally:
+                turn_lock.release()
+
+    thread = threading.Thread(target=_pump, name="morty-task-notification-pump", daemon=True)
+    thread.start()
+    return thread
 
 
 def _make_live_printer(

@@ -110,6 +110,27 @@ def test_permission_policy_keeps_content_ask_in_bypass_mode() -> None:
     assert bypassed.behavior == "allow"
 
 
+def test_permission_policy_asks_for_bash_file_edit_intent() -> None:
+    context = make_context()
+
+    sed_edit = evaluate_tool_permission("bash", {"command": "sed -i 's/a/b/' src/app.py"}, context)
+    python_script = evaluate_tool_permission("bash", {"command": "python3 rewrite.py"}, context)
+    redirection = evaluate_tool_permission("bash", {"command": "cat <<'EOF' > src/app.py\nx\nEOF"}, context)
+
+    assert sed_edit.behavior == "ask"
+    assert python_script.behavior == "ask"
+    assert redirection.behavior == "ask"
+    assert "edit_file/multi_edit/write_file" in sed_edit.message
+
+
+def test_permission_policy_allows_non_editing_bash_commands() -> None:
+    context = make_context()
+
+    assert evaluate_tool_permission("bash", {"command": "sed -n '1,80p' src/app.py"}, context).behavior == "allow"
+    assert evaluate_tool_permission("bash", {"command": "python3 -m pytest -q"}, context).behavior == "allow"
+    assert evaluate_tool_permission("bash", {"command": "python3 -c \"print('ok')\""}, context).behavior == "allow"
+
+
 def test_plan_mode_blocks_mutating_tools() -> None:
     context = make_context(mode="plan")
 
@@ -152,3 +173,26 @@ def test_tool_security_blocks_sensitive_writes_and_dangerous_bash(tmp_path) -> N
 
     with pytest.raises(SecurityViolation):
         assert_safe_bash_command("rm -rf .", root=tmp_path)
+
+
+def test_bash_security_ignores_process_substitution_inside_quotes(tmp_path) -> None:
+    assert_safe_bash_command(
+        "python3 -c \"print('text with >() inside a string')\"",
+        root=tmp_path,
+    )
+    assert_safe_bash_command(
+        "printf '%s\\n' 'private Set<String> extraMvGroupByCols = new HashSet<>();'",
+        root=tmp_path,
+    )
+
+
+def test_bash_security_blocks_real_process_substitution(tmp_path) -> None:
+    with pytest.raises(SecurityViolation, match="process substitution"):
+        assert_safe_bash_command("cat >(python3 script.py)", root=tmp_path)
+
+
+def test_bash_security_allows_read_only_python_and_sed(tmp_path) -> None:
+    assert_safe_bash_command("python3 -m pytest -q", root=tmp_path)
+    assert_safe_bash_command("python3 -c \"print('ok')\"", root=tmp_path)
+    assert_safe_bash_command("sed -n '1,80p' src/app.py", root=tmp_path)
+    assert_safe_bash_command("sed -i 's/old/new/' src/app.py", root=tmp_path)

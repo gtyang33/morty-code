@@ -35,6 +35,16 @@ class PromptBuilder:
                 compute=lambda: "优先保持上下文连续性、稳定的工具轨迹和可恢复性。",
             ),
             SystemPromptSection(
+                name="file-editing",
+                compute=lambda: (
+                    "文件修改策略: 修改已有文件时先用 read_file 获取相关内容，再优先使用 "
+                    "edit_file 或 multi_edit 做精确替换；新建文件或整文件重写才使用 "
+                    "write_file。不要用 bash 修改源码或文档，不要用 sed -i、python3 -c、"
+                    "perl -pi、awk、eho 重定向或 hceredoc 写文件。bash 只用于搜索、查看、"
+                    "测试、构建、git 等命令执行。"
+                ),
+            ),
+            SystemPromptSection(
                 name="tools",
                 compute=lambda: f"可用工具: {', '.join(tools) if tools else '无'}",
             ),

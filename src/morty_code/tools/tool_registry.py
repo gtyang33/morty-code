@@ -15,6 +15,7 @@ class ToolSpec:
     name: str
     description: str
     handler: ToolHandler
+    prompt: str | None = None
     input_schema: dict[str, Any] | None = None
     needs_context: bool = False
 
@@ -44,7 +45,7 @@ class ToolRegistry:
                 "type": "function",
                 "function": {
                     "name": tool.name,
-                    "description": tool.description,
+                    "description": tool.prompt or tool.description,
                     "parameters": tool.input_schema
                     or {
                         "type": "object",

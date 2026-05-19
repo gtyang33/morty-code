@@ -10,6 +10,7 @@ from typing import Callable
 from uuid import uuid4
 
 from morty_code.api.errors import ModelProviderError
+from morty_code.agents.task_notifications import drain_task_notifications
 from morty_code.attachments.attachment_manager import AttachmentManager
 from morty_code.cache.prompt_cache import (
     PromptCacheBreakDetector,
@@ -208,7 +209,7 @@ class QueryLoop:
             input_text="",
             context=tool_context,
             messages=working_messages,
-            queued_commands=[],
+            queued_commands=drain_task_notifications(tool_context.app_state),
         )
         attachment_messages = [
             self.attachment_manager.to_message(
