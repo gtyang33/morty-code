@@ -8,11 +8,11 @@ class ConversationRecovery:
 
     def recover(self, messages: list[Message]) -> list[Message]:
         """修复历史消息中的可恢复问题。"""
+        visible_messages = [message for message in messages if not message.is_virtual]
+        visible_messages = self._messages_after_latest_compact_boundary(visible_messages)
         recovered: list[Message] = []
         open_tool_use_ids: set[str] = set()
-        for message in messages:
-            if message.is_virtual:
-                continue
+        for message in visible_messages:
             if message.type == "assistant":
                 content = message.payload.get("content")
                 if not self._assistant_has_visible_content(content):
@@ -27,6 +27,18 @@ class ConversationRecovery:
                 open_tool_use_ids.difference_update(tool_result_ids)
             recovered.append(message)
         return recovered
+
+    def _messages_after_latest_compact_boundary(self, messages: list[Message]) -> list[Message]:
+        """只恢复最后一次 compact boundary 之后的主链上下文。"""
+
+        for index in range(len(messages) - 1, -1, -1):
+            message = messages[index]
+            if (
+                message.type == "system"
+                and message.payload.get("subtype") == "compact_boundary"
+            ):
+                return messages[index:]
+        return messages
 
     def _assistant_has_visible_content(self, content: object) -> bool:
         """内部处理该方法负责的业务逻辑。"""

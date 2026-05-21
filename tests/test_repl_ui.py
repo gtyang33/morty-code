@@ -14,10 +14,14 @@ from morty_code import (
     _SlashCommandCompleter,
     _Spinner,
     _SPINNER_FRAMES,
+    _format_mcp_interactive_detail,
+    _format_mcp_interactive_list,
+    _format_mcp_interactive_tools,
     _render_restored_cli_message,
     _render_cli_message,
 )
 from morty_code.input.commands import CommandRegistry, CommandSpec
+from morty_code.types.runtime_state import ContentReplacementState, ToolUseContext
 from morty_code.types.messages import Message
 
 
@@ -277,6 +281,81 @@ class TestCliMessageRendering:
 
         assert rendered == "[tool:ok] large result hidden; full content is kept in transcript/tool-results"
 
+    def test_mcp_tool_use_is_rendered_with_short_name_and_sql(self):
+        message = self._message(
+            "assistant",
+            [
+                {
+                    "type": "tool_use",
+                    "name": "mcp__mysql_query__mysql_query",
+                    "id": "tool-1",
+                    "input": {"sql": "SELECT COUNT(*) AS total_rows FROM PARTITIONS"},
+                }
+            ],
+        )
+
+        rendered = _render_cli_message(message)
+
+        assert rendered == "[tool] mysql_query: SELECT COUNT(*) AS total_rows FROM PARTITIONS"
+
+    def test_mcp_count_result_is_summarized(self):
+        message = self._message(
+            "user",
+            [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "tool-1",
+                    "is_error": False,
+                    "content": {
+                        "content": [
+                            {"type": "text", "text": '[\n {"total_rows": 231}\n]'},
+                            {"type": "text", "text": "Query execution time: 21.38 ms"},
+                        ],
+                        "isError": False,
+                    },
+                }
+            ],
+        )
+
+        rendered = _render_cli_message(message)
+
+        assert rendered == "[tool:ok] 1 row · total_rows=231 · 21.38 ms"
+        assert '{"content"' not in rendered
+
+    def test_mcp_table_result_is_summarized_with_preview(self):
+        message = self._message(
+            "user",
+            [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "tool-1",
+                    "is_error": False,
+                    "content": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    '[\n'
+                                    ' {"PART_ID": 1124617, "cnt": 2},\n'
+                                    ' {"PART_ID": 1272328, "cnt": 2}\n'
+                                    ']'
+                                ),
+                            },
+                            {"type": "text", "text": "Query execution time: 508.06 ms"},
+                        ],
+                        "isError": False,
+                    },
+                }
+            ],
+        )
+
+        rendered = _render_cli_message(message)
+
+        assert "2 rows" in rendered
+        assert "columns: PART_ID, cnt" in rendered
+        assert "PART_ID=1124617, cnt=2" in rendered
+        assert "508.06 ms" in rendered
+
     def test_plain_user_message_is_not_echoed_by_default(self):
         message = self._message("user", "hello")
 
@@ -290,13 +369,98 @@ class TestCliMessageRendering:
 
         assert _render_restored_cli_message(message) == "[user]\n之前的问题"
 
-    def test_restored_assistant_message_uses_normal_rendering(self):
+    def test_restored_assistant_message_is_shown_with_prefix(self):
         message = self._message(
             "assistant",
             [{"type": "text", "text": "之前的回答"}],
         )
 
-        assert _render_restored_cli_message(message) == "之前的回答"
+        assert _render_restored_cli_message(message) == "[assistant]\n之前的回答"
+
+    def test_restored_system_local_command_is_shown_with_local_prefix(self):
+        message = Message(
+            uuid="u1",
+            timestamp="2026-05-07T00:00:00",
+            type="system",
+            payload={"subtype": "local_command", "content": "Configured MCP servers:\n- none"},
+        )
+
+        assert _render_restored_cli_message(message) == "[local]\nConfigured MCP servers:\n- none"
+
+
+# ---------------------------------------------------------------------------
+# MCP interactive rendering
+# ---------------------------------------------------------------------------
+
+
+class TestMcpInteractiveRendering:
+    """交互式 /mcp 应接近 Claude 的面板体验，而不是打印内部 system 消息。"""
+
+    def _context(self) -> ToolUseContext:
+        return ToolUseContext(
+            tools=["mcp__mysql_query__mysql_query"],
+            model="test-model",
+            permission_mode="default",
+            app_state={
+                "mcp_servers": {
+                    "demo": {
+                        "type": "stdio",
+                        "command": "python",
+                        "args": ["fake_mcp_server.py"],
+                        "_scope": "user",
+                        "_config_path": "/home/transwarp/.morty/mcp.json",
+                    },
+                    "mysql_query": {
+                        "type": "stdio",
+                        "command": "npx",
+                        "args": ["@benborla29/mcp-server-mysql"],
+                        "_scope": "user",
+                        "_config_path": "/home/transwarp/.morty/mcp.json",
+                    },
+                },
+                "mcp_statuses": {
+                    "demo": {"status": "pending"},
+                    "mysql_query": {
+                        "status": "connected",
+                        "tools": [
+                            {
+                                "name": "mysql_query",
+                                "wrapped_name": "mcp__mysql_query__mysql_query",
+                                "description": "Run SQL queries against MySQL database (READ-ONLY)",
+                                "input_schema": {"required": ["sql"]},
+                            }
+                        ],
+                        "capabilities": ["tools"],
+                    },
+                },
+            },
+            read_file_state={},
+            content_replacement_state=ContentReplacementState(),
+        )
+
+    def test_mcp_interactive_list_is_panel_style(self):
+        rendered = _format_mcp_interactive_list(self._context(), selected=None)
+
+        assert "╭─ Manage MCP servers" in rendered
+        assert "User MCPs (/home/transwarp/.morty/mcp.json)" in rendered
+        assert "mysql_query · ✓ connected · 1 tool" in rendered
+        assert "[system:local_command]" not in rendered
+
+    def test_mcp_interactive_detail_uses_action_menu_once(self):
+        rendered = _format_mcp_interactive_detail(self._context(), "mysql_query")
+
+        assert "╭─ Mysql Query MCP Server" in rendered
+        assert "Status: ✓ connected" in rendered
+        assert "❯ 1. View tools" in rendered
+        assert rendered.count("View tools") == 1
+        assert "/mcp mysql_query tools" not in rendered
+
+    def test_mcp_interactive_tools_is_panel_style(self):
+        rendered = _format_mcp_interactive_tools(self._context(), "mysql_query")
+
+        assert "╭─ Tools · mysql_query" in rendered
+        assert "mcp__mysql_query__mysql_query" in rendered
+        assert "Required: sql" in rendered
 
 
 # ---------------------------------------------------------------------------

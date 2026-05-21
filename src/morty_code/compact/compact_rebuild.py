@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from copy import deepcopy
+from datetime import UTC, datetime
+from uuid import uuid4
+
 from morty_code.attachments.attachment_manager import AttachmentManager
 from morty_code.types.messages import Message
 from morty_code.types.runtime_state import ToolUseContext
@@ -19,6 +23,32 @@ def rebuild_post_compact_messages(
         rebuilt.extend(attachments)
     rebuilt.extend(messages_to_keep)
     return rebuilt
+
+
+def clone_retained_messages_for_compact(messages_to_keep: list[Message]) -> list[Message]:
+    """为 transcript 复制 retained tail，让它们稳定落在 compact boundary 后面。"""
+
+    now = datetime.now(UTC).isoformat()
+    cloned: list[Message] = []
+    for message in messages_to_keep:
+        # retained tail 原本已经在 transcript 的旧位置出现过；这里必须换新 uuid，
+        # 否则 append-only parent 链会出现重复节点，恢复和 UI 展示都会变得含混。
+        cloned.append(
+            Message(
+                uuid=str(uuid4()),
+                timestamp=now,
+                type=message.type,
+                payload=deepcopy(message.payload),
+                is_meta=message.is_meta,
+                is_virtual=message.is_virtual,
+                origin={
+                    **(message.origin or {}),
+                    "source": "post_compact_retained",
+                    "original_uuid": message.uuid,
+                },
+            )
+        )
+    return cloned
 
 
 def build_reinjection_attachments(context: ToolUseContext) -> list[Message]:

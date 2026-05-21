@@ -210,6 +210,8 @@ def _has_unquoted_output_redirection(command: str) -> bool:
             continue
         previous_char = command[index - 1] if index > 0 else ""
         next_char = command[index + 1] if index + 1 < len(command) else ""
+        if previous_char.isdigit():
+            continue
         if next_char == "(":
             continue
         if previous_char == "&":

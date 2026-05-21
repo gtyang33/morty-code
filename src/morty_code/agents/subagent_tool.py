@@ -44,6 +44,7 @@ def register_subagent_tool(query_loop, registry: ToolRegistry) -> None:
         agent_type = str(args.get("subagent_type") or "general-purpose")
         run_in_background = bool(args.get("run_in_background") is True)
         description = str(args.get("description") or agent_type)
+        name = str(args.get("name") or "").strip()
         runner = make_runner(context)
         if run_in_background:
             return _launch_background_agent(
@@ -54,6 +55,7 @@ def register_subagent_tool(query_loop, registry: ToolRegistry) -> None:
                 context=context,
                 cache_safe=cache_safe,
                 max_turns=_optional_int(args.get("max_turns")),
+                name=name,
             )
         result = await runner.run(
             agent_type=agent_type,
@@ -79,6 +81,10 @@ def register_subagent_tool(query_loop, registry: ToolRegistry) -> None:
                 "Delegate a bounded task to an isolated subagent and return its concise result.\n\n"
                 "Use the returned output or output_file as the authoritative subagent result. "
                 "If the result is long, read output_file with read_file.\n\n"
+                "When run_in_background is true, the agent runs asynchronously and will report "
+                "back through a task-notification. After launching a background agent, do not "
+                "duplicate the same work in the parent agent and do not poll task_output unless "
+                "the user explicitly asks for status.\n\n"
                 "Do not read .morty/subagents for normal task results. "
                 "Do not parse transcript JSONL with bash, cat, sed, or Python; transcripts are diagnostic-only."
             ),
@@ -99,6 +105,10 @@ def register_subagent_tool(query_loop, registry: ToolRegistry) -> None:
                     "description": {
                         "type": "string",
                         "description": "Short task description for background task displays.",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Optional name that makes a background subagent addressable by send_message.",
                     },
                     "run_in_background": {
                         "type": "boolean",
@@ -127,6 +137,7 @@ def _launch_background_agent(
     context: ToolUseContext,
     cache_safe: CacheSafeParams,
     max_turns: int | None,
+    name: str = "",
 ) -> dict[str, object]:
     """内部处理该方法负责的业务逻辑。"""
     task_id = str(uuid4())
@@ -140,11 +151,14 @@ def _launch_background_agent(
         description=description,
         prompt=prompt,
     )
+    _register_agent_name(context.app_state, task, name or str(description))
     background_context = clone_tool_use_context_for_fork(
         context,
         fork_label=f"background_subagent:{agent_type}",
         skip_cache_write=True,
     )
+    background_context.app_state["subagent_task_id"] = task.task_id
+    background_context.app_state["subagent_agent_id"] = task.agent_id
     background_cache_safe = CacheSafeParams(
         system_prompt=list(cache_safe.system_prompt),
         user_context=dict(cache_safe.user_context),
@@ -206,6 +220,16 @@ def _launch_background_agent(
         "description": task.description,
         "output_file": task.output_file,
     }
+
+
+def _register_agent_name(app_state: dict[str, object], task, name: str) -> None:
+    """记录后台子代理名称到 agent_id，供 send_message 路由。"""
+
+    if not name:
+        return
+    raw = app_state.setdefault("agent_name_registry", {})
+    if isinstance(raw, dict):
+        raw[name] = task.agent_id
 
 
 def _optional_int(value: object) -> int | None:

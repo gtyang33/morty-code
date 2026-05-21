@@ -47,6 +47,7 @@ class PromptBuilder:
             SystemPromptSection(
                 name="tools",
                 compute=lambda: f"可用工具: {', '.join(tools) if tools else '无'}",
+                cache_break=True,
             ),
             SystemPromptSection(
                 name="dynamic-boundary",

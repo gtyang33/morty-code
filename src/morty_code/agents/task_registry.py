@@ -27,6 +27,7 @@ class SubagentTask:
     transcript_path: str | None = None
     output: str = ""
     error: str = ""
+    pending_messages: list[str] = field(default_factory=list)
     process_id: int | None = None
     heartbeat_at: str | None = None
     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
@@ -107,6 +108,35 @@ class SubagentTaskRegistry:
         with self._lock:
             self._tasks[task.task_id] = task
         return task
+
+    def get_by_agent_id(self, agent_id: str) -> SubagentTask | None:
+        """按 agent_id 查找任务，支持 SendMessage 使用内部 agent id 路由。"""
+
+        for task in self.list():
+            if task.agent_id == agent_id:
+                return task
+        return None
+
+    def queue_pending_message(self, task_id: str, message: str) -> SubagentTask | None:
+        """给运行中的后台子代理排队一条待注入消息。"""
+
+        task = self.get(task_id)
+        if task is None:
+            return None
+        task.pending_messages.append(message)
+        self.update(task)
+        return task
+
+    def drain_pending_messages(self, task_id: str) -> list[str]:
+        """取出并清空发给后台子代理的待处理消息。"""
+
+        task = self.get(task_id)
+        if task is None or not task.pending_messages:
+            return []
+        messages = list(task.pending_messages)
+        task.pending_messages = []
+        self.update(task)
+        return messages
 
     def list(self) -> list[SubagentTask]:
         """列出内存和磁盘上的任务摘要。"""

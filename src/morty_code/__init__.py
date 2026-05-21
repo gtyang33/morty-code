@@ -25,8 +25,20 @@ from morty_code.compact.auto_compact import AutoCompactDecider
 from morty_code.compact.compact_agent import CompactAgent
 from morty_code.input.commands import CommandRegistry
 from morty_code.input.handle_input import InputDispatcher
-from morty_code.input.process_user_input import UserInputProcessor
+from morty_code.input.process_user_input import (
+    UserInputProcessor,
+    _disable_mcp_server,
+    _enable_mcp_server,
+    _format_mcp_server_detail,
+    _format_mcp_server_tools,
+    _mcp_servers,
+    _mcp_statuses,
+    _reconnect_mcp_server,
+    _tool_count,
+)
 from morty_code.harness import run_stream_json_harness
+from morty_code.mcp.config import add_mcp_server, load_mcp_server_entries, parse_env_assignments
+from morty_code.mcp.manager import create_mcp_tool_registry, merge_tool_registries
 from morty_code.memory.memory_extractor import MemoryExtractor
 from morty_code.memory.model_memory_extractor import ModelMemoryExtractor
 from morty_code.agents.task_notifications import has_task_notifications
@@ -37,6 +49,7 @@ from morty_code.runtime.query_engine import QueryEngine
 from morty_code.runtime.query_loop import QueryLoop
 from morty_code.security import load_permission_settings
 from morty_code.tools import NullToolRunner, ToolRunner, create_local_tool_registry
+from morty_code.tools.tool_registry import ToolRegistry
 from morty_code.tools.tool_result_formatter import format_tool_result_summary
 from morty_code.transcript.transcript_store import TranscriptStore
 from morty_code.types.messages import Message
@@ -112,10 +125,17 @@ def _runtime_app_state(
         "always_ask_tools": permission_settings.ask,
         "permission_settings_sources": permission_settings.sources,
         "tool_schemas": tool_registry.api_tool_schemas() if tool_registry is not None else [],
+        "mcp_servers": tool_registry_mcp_servers(tool_registry),
         "enable_prompt_caching": os.environ.get("DISABLE_PROMPT_CACHING") != "1",
         "send_cache_control": os.environ.get("MORTY_SEND_CACHE_CONTROL") == "1",
         "prompt_cache_ttl": os.environ.get("MORTY_PROMPT_CACHE_TTL"),
     }
+
+
+def tool_registry_mcp_servers(tool_registry) -> dict[str, object]:
+    """占位字段由 main 里覆盖；保持测试和旧调用方的 app_state 结构稳定。"""
+
+    return {}
 
 
 class _ReplLexer(Lexer):
@@ -214,6 +234,9 @@ class _Spinner:
 def main() -> None:
     """最小 CLI 入口，用于手动验证 runtime 主链路是否能跑通。"""
 
+    if len(sys.argv) > 1 and sys.argv[1] == "mcp":
+        raise SystemExit(_handle_mcp_cli(sys.argv[2:], workspace_root=Path.cwd()))
+
     parser = argparse.ArgumentParser(prog="morty-code")
     parser.add_argument("--cwd", help="目标工作区目录，默认使用当前 shell 所在目录")
     parser.add_argument("--session", help="恢复指定 JSONL transcript 文件")
@@ -282,7 +305,19 @@ def main() -> None:
         if args.provider == "openai-compatible"
         else EchoModelClient()
     )
-    tool_registry = create_local_tool_registry(workspace_root) if args.enable_local_tools else None
+    local_tool_registry = create_local_tool_registry(workspace_root) if args.enable_local_tools else None
+    mcp_configs = load_mcp_server_entries(workspace_root)
+    mcp_statuses: dict[str, dict[str, object]] = {
+        name: {"status": "pending"} for name in mcp_configs
+    }
+    # Claude Code 的 MCP 连接不阻塞 REPL：启动时只放 pending，后台连接
+    # 成功后再把 MCP tools 注入工具池。这里保留同一个 ToolRegistry 对象，
+    # ToolRunner 后续能看到后台注册的新工具。
+    tool_registry = merge_tool_registries(local_tool_registry)
+    if mcp_configs and tool_registry is None:
+        tool_registry = ToolRegistry()
+    if not tool_registry.list_names():
+        tool_registry = tool_registry if mcp_configs else None
     permission_settings = load_permission_settings(
         workspace_root,
         env_allow=_env_list("MORTY_ALLOW_TOOLS"),
@@ -310,6 +345,9 @@ def main() -> None:
         permission_settings=permission_settings,
         tool_registry=tool_registry,
     )
+    app_state["mcp_servers"] = mcp_configs
+    app_state["mcp_statuses"] = mcp_statuses
+    app_state["tool_registry"] = tool_registry
     tool_context = ToolUseContext(
         tools=tool_registry.list_names() if tool_registry is not None else [],
         model=args.model,
@@ -320,6 +358,14 @@ def main() -> None:
         session_memory_path=str(morty_dir / "session_memory.md"),
         durable_memory_dir=str(morty_dir / "memory"),
     )
+    if mcp_configs and tool_registry is not None:
+        _start_mcp_background_loader(
+            mcp_configs=mcp_configs,
+            workspace_root=workspace_root,
+            registry=tool_registry,
+            tool_context=tool_context,
+            statuses=mcp_statuses,
+        )
     atexit.register(
         _mark_running_subagents_interrupted,
         str(tool_context.app_state["subagent_tasks_dir"]),
@@ -397,6 +443,9 @@ def main() -> None:
                     return
                 if not raw:
                     continue
+                if raw == "/mcp":
+                    _run_mcp_interactive_menu(engine, tool_context, session)
+                    continue
                 spinner.start("thinking")
                 try:
                     live_print, printed_ids = _make_live_printer(spinner=spinner)
@@ -412,9 +461,279 @@ def main() -> None:
                     if message.uuid in printed_ids:
                         continue
                     _print_cli_message(message)
+
     finally:
         stop_notification_pump.set()
         notification_thread.join(timeout=1)
+
+
+def _handle_mcp_cli(argv: list[str], *, workspace_root: Path) -> int:
+    """处理 `morty-code mcp ...` 子命令，目前支持 Claude 风格的 stdio add。"""
+
+    if not argv or argv[0] != "add":
+        parser = argparse.ArgumentParser(prog="morty-code mcp")
+        parser.error("only `morty-code mcp add` is currently supported")
+    if len(argv) < 2:
+        raise SystemExit("usage: morty-code mcp add <name> [options] -- <command> [args...]")
+    name = argv[1]
+    scope = "project"
+    env_values: list[str] = []
+    server_command: list[str] = []
+    index = 2
+    while index < len(argv):
+        token = argv[index]
+        if token == "--":
+            server_command = argv[index + 1 :]
+            break
+        if token in {"-s", "--scope"}:
+            index += 1
+            if index >= len(argv):
+                raise SystemExit(f"{token} requires a value")
+            scope = argv[index]
+        elif token in {"-e", "--env"}:
+            index += 1
+            if index >= len(argv):
+                raise SystemExit(f"{token} requires a value")
+            env_values.append(argv[index])
+        else:
+            server_command = argv[index:]
+            break
+        index += 1
+    if not server_command:
+        raise SystemExit("server command is required; use: morty-code mcp add <name> -- <command> [args...]")
+    env = parse_env_assignments(env_values)
+    config_path = add_mcp_server(
+        name=name,
+        scope=scope,
+        command=server_command[0],
+        args=server_command[1:],
+        env=env,
+        workspace_root=workspace_root,
+    )
+    print(
+        "Added stdio MCP server "
+        f"{name} with command: {' '.join(server_command)} "
+        f"to {scope} config"
+    )
+    print(f"File modified: {config_path}")
+    return 0
+
+
+def _run_mcp_interactive_menu(
+    engine: QueryEngine,
+    tool_context: ToolUseContext,
+    session: PromptSession[str],
+) -> None:
+    """Claude 风格的 `/mcp` 交互菜单：列表 -> 详情 -> 动作。"""
+
+    del engine
+    servers = _mcp_servers(tool_context)
+    if not servers:
+        print(_mcp_box("Manage MCP servers", ["No MCP servers configured."]))
+        return
+    server_names = sorted(str(name) for name in servers)
+    print(_format_mcp_interactive_list(tool_context, selected=None))
+    choice = session.prompt("Select server › ").strip()
+    if not choice:
+        return
+    server_name = _resolve_mcp_menu_choice(choice, server_names)
+    if server_name not in server_names:
+        print(f"MCP server not found: {server_name}")
+        return
+
+    print(_format_mcp_interactive_detail(tool_context, server_name))
+    while True:
+        action = session.prompt("Action › ").strip()
+        if not action:
+            return
+        action_name = {
+            "1": "tools",
+            "2": "reconnect",
+            "3": "disable",
+            "4": "enable",
+            "tools": "tools",
+            "reconnect": "reconnect",
+            "disable": "disable",
+            "enable": "enable",
+        }.get(action)
+        if action_name is None:
+            print(f"Unknown action: {action}")
+            continue
+        if action_name == "tools":
+            print(_format_mcp_interactive_tools(tool_context, server_name))
+            continue
+        if action_name == "reconnect":
+            message = asyncio.run(_reconnect_mcp_server(tool_context, server_name))
+        elif action_name == "disable":
+            message = _disable_mcp_server(tool_context, server_name)
+        else:
+            message = asyncio.run(_enable_mcp_server(tool_context, server_name))
+        print(_mcp_box("MCP action complete", [message]))
+        print(_format_mcp_interactive_detail(tool_context, server_name))
+
+
+def _resolve_mcp_menu_choice(choice: str, server_names: list[str]) -> str:
+    if not choice.isdigit():
+        return choice
+    index = int(choice) - 1
+    if index < 0 or index >= len(server_names):
+        return choice
+    return server_names[index]
+
+
+def _format_mcp_interactive_list(
+    tool_context: ToolUseContext,
+    *,
+    selected: str | None,
+) -> str:
+    servers = _mcp_servers(tool_context)
+    statuses = _mcp_statuses(tool_context)
+    lines = [f"{len(servers)} {_count_word(len(servers), 'server')}"]
+    current_scope = None
+    for index, name in enumerate(sorted(servers), start=1):
+        config = servers[name]
+        scope = str(config.get("_scope") or "other")
+        if scope != current_scope:
+            current_scope = scope
+            config_path = config.get("_config_path")
+            lines.append("")
+            lines.append(f"{_scope_title(scope)} ({config_path})" if config_path else _scope_title(scope))
+        status = statuses.get(name, {})
+        marker = "❯" if selected == name else " "
+        lines.append(
+            f"{marker} {index}. {name} · {_status_badge(status)}{_tool_suffix(status)}"
+        )
+    lines.append("")
+    lines.append("Select a server by number/name. Press Enter to close.")
+    return _mcp_box("Manage MCP servers", lines)
+
+
+def _format_mcp_interactive_detail(tool_context: ToolUseContext, server_name: str) -> str:
+    servers = _mcp_servers(tool_context)
+    statuses = _mcp_statuses(tool_context)
+    config = servers[server_name]
+    status = statuses.get(server_name, {})
+    args = config.get("args") if isinstance(config.get("args"), list) else []
+    capabilities = status.get("capabilities")
+    if not isinstance(capabilities, list) or not capabilities:
+        capabilities = ["tools"] if _tool_count(status) else []
+    lines = [
+        f"Status: {_status_badge(status)}",
+        f"Command: {config.get('command') or ''}",
+        f"Args: {' '.join(str(arg) for arg in args)}",
+        f"Config location: {config.get('_config_path') or 'unknown'}",
+        f"Capabilities: {' · '.join(str(item) for item in capabilities) if capabilities else 'none'}",
+        f"Tools: {_tool_count(status)} {_count_word(_tool_count(status), 'tool')}",
+    ]
+    if status.get("error"):
+        lines.append(f"Error: {status.get('error')}")
+    lines.append("")
+    lines.append("❯ 1. View tools")
+    lines.append("  2. Reconnect")
+    lines.append("  3. Disable")
+    if servers[server_name].get("disabled") or statuses.get(server_name, {}).get("status") == "disabled":
+        lines.append("  4. Enable")
+    lines.append("")
+    lines.append("Choose an action by number/name. Press Enter to go back.")
+    return _mcp_box(f"{_mcp_title(server_name)} MCP Server", lines)
+
+
+def _format_mcp_interactive_tools(tool_context: ToolUseContext, server_name: str) -> str:
+    statuses = _mcp_statuses(tool_context)
+    raw = _format_mcp_server_tools(server_name, statuses.get(server_name, {}))
+    lines = raw.splitlines()[2:] if "\n\n" in raw else raw.splitlines()
+    return _mcp_box(f"Tools · {server_name}", lines or ["No tools are currently registered."])
+
+
+def _mcp_box(title: str, lines: list[str]) -> str:
+    width = min(118, max([len(_display_safe(title)) + 4, *(len(_display_safe(line)) + 4 for line in lines)]))
+    top = f"╭─ {title} " + "─" * max(0, width - len(_display_safe(title)) - 5) + "╮"
+    bottom = "╰" + "─" * (width - 2) + "╯"
+    body = [f"│ {line}{' ' * max(0, width - len(_display_safe(line)) - 3)}│" for line in lines]
+    return "\n".join([top, *body, bottom])
+
+
+def _display_safe(value: object) -> str:
+    return str(value).replace("\t", "    ")
+
+
+def _scope_title(scope: str) -> str:
+    return {
+        "user": "User MCPs",
+        "project": "Project MCPs",
+    }.get(scope, "Other MCPs")
+
+
+def _status_badge(status: dict[str, object]) -> str:
+    state = str(status.get("status") or "pending")
+    icon = {
+        "connected": "✓",
+        "pending": "◌",
+        "connecting": "…",
+        "failed": "✗",
+        "disabled": "○",
+    }.get(state, "•")
+    return f"{icon} {state}"
+
+
+def _tool_suffix(status: dict[str, object]) -> str:
+    count = _tool_count(status)
+    return f" · {count} {_count_word(count, 'tool')}" if count else ""
+
+
+def _count_word(count: int, singular: str) -> str:
+    return singular if count == 1 else f"{singular}s"
+
+
+def _mcp_title(name: str) -> str:
+    return " ".join(part.capitalize() for part in name.replace("-", "_").split("_") if part)
+
+
+def _submit_and_print_local_command(
+    engine: QueryEngine,
+    tool_context: ToolUseContext,
+    raw: str,
+) -> None:
+    """执行本地 slash command 并复用 CLI 消息渲染。"""
+
+    for message in engine.submit_message_sync(raw, tool_context):
+        _print_cli_message(message)
+
+
+def _start_mcp_background_loader(
+    *,
+    mcp_configs: dict[str, dict[str, object]],
+    workspace_root: Path,
+    registry: ToolRegistry,
+    tool_context: ToolUseContext,
+    statuses: dict[str, dict[str, object]],
+) -> threading.Thread:
+    """后台加载 MCP tools，避免 npx/数据库连接阻塞 Morty 启动。"""
+
+    def _load() -> None:
+        try:
+            mcp_registry = asyncio.run(
+                create_mcp_tool_registry(
+                    mcp_configs,
+                    workspace_root=workspace_root,
+                    statuses=statuses,
+                )
+            )
+            tools = [
+                tool
+                for name in mcp_registry.list_names()
+                if (tool := mcp_registry.find(name)) is not None
+            ]
+            registry.extend(tools)
+            tool_context.tools = registry.list_names()
+            tool_context.app_state["tool_schemas"] = registry.api_tool_schemas()
+            tool_context.app_state["mcp_statuses"] = statuses
+        except Exception as exc:  # noqa: BLE001 - 后台 MCP 加载不能杀死主会话。
+            tool_context.app_state["mcp_loader_error"] = str(exc)
+
+    thread = threading.Thread(target=_load, name="morty-mcp-loader", daemon=True)
+    thread.start()
+    return thread
 
 
 def _start_task_notification_pump(
@@ -525,10 +844,20 @@ def _render_cli_message(message: Message) -> str:
 
 
 def _render_restored_cli_message(message: Message) -> str:
-    """内部渲染面向用户或模型的文本。"""
-    if message.type != "user":
-        return _render_cli_message(message)
+    """恢复历史时显式标出角色，避免用户和助手内容混在一起。"""
+
     content = message.payload.get("content")
+    if message.type == "assistant":
+        rendered = _render_content(content, verbose=False)
+        return f"[assistant]\n{rendered}".strip() if rendered else ""
+    if message.type == "system":
+        rendered = _render_content(content, verbose=False)
+        subtype = message.payload.get("subtype")
+        prefix = "[local]" if subtype == "local_command" else f"[system:{subtype}]" if subtype else "[system]"
+        return f"{prefix}\n{rendered}".strip() if rendered else prefix
+    if message.type != "user":
+        rendered = _render_cli_message(message)
+        return rendered
     if _is_tool_result_content(content):
         return _render_tool_results(content, verbose=os.environ.get("MORTY_VERBOSE_TOOL_OUTPUT") == "1")
     rendered = _render_content(content, verbose=True)
@@ -572,13 +901,16 @@ def _render_tool_use(block: dict[str, object]) -> str:
     name = str(block.get("name") or "unknown")
     tool_input = block.get("input")
     summary = _summarize_tool_input(name, tool_input)
-    return f"[tool] {name}{(': ' + summary) if summary else ''}"
+    display_name = _display_tool_name(name)
+    return f"[tool] {display_name}{(': ' + summary) if summary else ''}"
 
 
 def _summarize_tool_input(name: str, tool_input: object) -> str:
     """内部压缩并总结上下文内容。"""
     if not isinstance(tool_input, dict):
         return ""
+    if name.startswith("mcp__") and "sql" in tool_input:
+        return _truncate_text(str(tool_input.get("sql") or ""), 160)
     if name in {"read_file", "list_dir", "file_info"}:
         return str(tool_input.get("path") or ".")
     if name == "grep_text":
@@ -595,6 +927,16 @@ def _summarize_tool_input(name: str, tool_input: object) -> str:
     for key, value in list(tool_input.items())[:3]:
         items.append(f"{key}={_truncate_text(str(value), 40)}")
     return ", ".join(items)
+
+
+def _display_tool_name(name: str) -> str:
+    """把 MCP 内部工具名压成用户更容易扫读的短名称。"""
+
+    if name.startswith("mcp__"):
+        parts = name.split("__")
+        if len(parts) >= 3:
+            return parts[-1] or name
+    return name
 
 
 def _render_tool_results(content: object, *, verbose: bool) -> str:

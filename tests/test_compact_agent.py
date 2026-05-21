@@ -7,7 +7,10 @@ from morty_code.compact.compact_agent import (
     ERROR_MESSAGE_NOT_ENOUGH_MESSAGES,
     CompactAgent,
 )
-from morty_code.compact.compact_rebuild import rebuild_post_compact_messages
+from morty_code.compact.compact_rebuild import (
+    clone_retained_messages_for_compact,
+    rebuild_post_compact_messages,
+)
 from morty_code.types.messages import Message
 
 
@@ -196,6 +199,22 @@ def test_rebuild_places_reinjected_attachments_before_retained_tail() -> None:
         "attachment",
         "retained",
     ]
+
+
+def test_clone_retained_messages_for_compact_preserves_tail_after_boundary() -> None:
+    """验证 retained tail 写入 transcript 时会变成 boundary 后的新消息。"""
+
+    retained = _message("assistant", [{"type": "text", "text": "recent answer"}], uuid="old-retained")
+
+    [cloned] = clone_retained_messages_for_compact([retained])
+
+    assert cloned.uuid != retained.uuid
+    assert cloned.type == retained.type
+    assert cloned.payload == retained.payload
+    assert cloned.origin == {
+        "source": "post_compact_retained",
+        "original_uuid": "old-retained",
+    }
 
 
 def test_compact_rejects_empty_message_list() -> None:

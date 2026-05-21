@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from morty_code.api.errors import ModelProviderError
 from morty_code.agents.task_notifications import drain_task_notifications
+from morty_code.agents.task_registry import get_subagent_task_registry
 from morty_code.attachments.attachment_manager import AttachmentManager
 from morty_code.cache.prompt_cache import (
     PromptCacheBreakDetector,
@@ -18,11 +19,12 @@ from morty_code.cache.prompt_cache import (
     extract_cache_usage,
 )
 from morty_code.agents.subagent_tool import register_subagent_tool
+from morty_code.agents.send_message_tool import register_send_message_tool
 from morty_code.agents.task_output_tool import register_task_output_tool
 from morty_code.tools.tool_result_budget import DEFAULT_MESSAGE_BUDGET_CHARS, apply_tool_result_budget
 from morty_code.transcript.message_normalizer import MessageNormalizer
 from morty_code.types.messages import Message
-from morty_code.types.runtime_state import CacheSafeParams, ToolUseContext
+from morty_code.types.runtime_state import CacheSafeParams, QueuedCommand, ToolUseContext
 
 
 @dataclass
@@ -54,6 +56,7 @@ class QueryLoop:
         registry = getattr(tool_runner, "registry", None)
         if registry is not None:
             register_subagent_tool(self, registry)
+            register_send_message_tool(registry)
             register_task_output_tool(registry)
         self.normalizer = MessageNormalizer()
         self.attachment_manager = attachment_manager or AttachmentManager()
@@ -209,7 +212,10 @@ class QueryLoop:
             input_text="",
             context=tool_context,
             messages=working_messages,
-            queued_commands=drain_task_notifications(tool_context.app_state),
+            queued_commands=[
+                *drain_task_notifications(tool_context.app_state),
+                *self._drain_subagent_pending_messages(tool_context),
+            ],
         )
         attachment_messages = [
             self.attachment_manager.to_message(
@@ -296,6 +302,25 @@ class QueryLoop:
         """内部处理该方法负责的业务逻辑。"""
         if callback is not None and messages:
             callback(messages)
+
+    def _drain_subagent_pending_messages(self, tool_context: ToolUseContext) -> list[QueuedCommand]:
+        """把 SendMessage 发给当前子代理的消息转换成队列命令。"""
+
+        task_id = str(tool_context.app_state.get("subagent_task_id") or "").strip()
+        if not task_id:
+            return []
+        registry_root = str(tool_context.app_state.get("subagent_tasks_dir") or ".morty/tasks")
+        messages = get_subagent_task_registry(registry_root).drain_pending_messages(task_id)
+        return [
+            QueuedCommand(
+                value=message,
+                mode="prompt",
+                skip_slash_commands=True,
+                is_meta=True,
+                origin={"source": "send_message"},
+            )
+            for message in messages
+        ]
 
     async def _respond_with_retries(
         self,

@@ -91,6 +91,9 @@ def test_spawn_agent_prompt_tells_model_not_to_read_transcripts(tmp_path: Path) 
     assert "Use the returned output or output_file" in prompt
     assert "Do not read .morty/subagents" in prompt
     assert "Do not parse transcript JSONL" in prompt
+    assert "When run_in_background is true" in prompt
+    assert "do not duplicate the same work" in prompt
+    assert "do not poll task_output" in prompt
 
 
 def test_background_spawn_enqueues_task_notification(tmp_path: Path) -> None:

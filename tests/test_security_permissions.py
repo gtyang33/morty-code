@@ -129,6 +129,8 @@ def test_permission_policy_allows_non_editing_bash_commands() -> None:
     assert evaluate_tool_permission("bash", {"command": "sed -n '1,80p' src/app.py"}, context).behavior == "allow"
     assert evaluate_tool_permission("bash", {"command": "python3 -m pytest -q"}, context).behavior == "allow"
     assert evaluate_tool_permission("bash", {"command": "python3 -c \"print('ok')\""}, context).behavior == "allow"
+    assert evaluate_tool_permission("bash", {"command": "find /home -name mvn -type f 2>/dev/null | head -5"}, context).behavior == "allow"
+    assert evaluate_tool_permission("bash", {"command": "which mvn 2>/dev/null"}, context).behavior == "allow"
 
 
 def test_plan_mode_blocks_mutating_tools() -> None:

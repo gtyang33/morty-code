@@ -10,6 +10,7 @@ from morty_code.compact.auto_compact import AutoCompactDecider
 from morty_code.compact.compact_agent import CompactAgent
 from morty_code.compact.compact_rebuild import (
     build_reinjection_attachments,
+    clone_retained_messages_for_compact,
     rebuild_post_compact_messages,
 )
 from morty_code.agents.task_notifications import drain_task_notifications
@@ -313,7 +314,11 @@ class QueryEngine:
             rebuilt = rebuild_post_compact_messages(summary_messages, messages_to_keep, reinjected)
             self.messages = rebuilt
             compact_messages = [*summary_messages, *reinjected]
-            await self.transcript_store.append_messages(compact_messages)
+            transcript_messages = [
+                *compact_messages,
+                *clone_retained_messages_for_compact(messages_to_keep),
+            ]
+            await self.transcript_store.append_messages(transcript_messages)
             await self.transcript_store.append_event(
                 {
                     "type": "compact",
@@ -322,6 +327,7 @@ class QueryEngine:
                     "summary_count": len(summary_messages),
                     "messages_to_keep_count": len(messages_to_keep),
                     "reinjected_count": len(reinjected),
+                    "retained_transcript_count": len(transcript_messages) - len(compact_messages),
                 }
             )
             self.auto_compact_decider.record_success()

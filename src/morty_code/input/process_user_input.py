@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from uuid import uuid4
 
 from morty_code.attachments.attachment_manager import AttachmentManager
@@ -8,7 +9,10 @@ from morty_code.input.commands import CommandRegistry, CommandSpec
 from morty_code.input.slash_commands import SlashCommandProcessor, parse_slash_command
 from morty_code.agents.task_registry import get_subagent_task_registry
 from morty_code.memory.durable_memory import DurableMemoryStore
+from morty_code.mcp.config import load_mcp_server_entries, set_mcp_server_disabled
+from morty_code.mcp.manager import create_mcp_tool_registry
 from morty_code.plan import PlanStore
+from morty_code.tools.tool_registry import ToolRegistry
 from morty_code.types.messages import Attachment, Message
 from morty_code.types.runtime_state import ProcessedUserInput, QueuedCommand, ToolUseContext
 
@@ -142,6 +146,14 @@ class UserInputProcessor:
                 description="显示当前允许的工具",
                 kind="local",
                 handler=self._handle_tools,
+            )
+        )
+        registry.register(
+            CommandSpec(
+                name="mcp",
+                description="显示 MCP server 和 MCP tools",
+                kind="local",
+                handler=self._handle_mcp,
             )
         )
         registry.register(
@@ -305,6 +317,47 @@ class UserInputProcessor:
             ),
         }
 
+    async def _handle_mcp(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        """显示和管理 MCP server，交互菜单和脚本化子命令共享这个入口。"""
+
+        tool_context = context["tool_context"]
+        if not isinstance(tool_context, ToolUseContext):
+            return {"mode": "local", "content": "MCP context unavailable."}
+        servers = _mcp_servers(tool_context)
+        statuses = _mcp_statuses(tool_context)
+        parts = args.split()
+        if not parts:
+            return {"mode": "local", "content": _format_mcp_server_list(servers, statuses)}
+
+        server_name = parts[0]
+        action = parts[1] if len(parts) > 1 else "detail"
+        if server_name not in servers:
+            return {"mode": "local", "content": f"MCP server not found: {server_name}"}
+        if action == "detail":
+            return {
+                "mode": "local",
+                "content": _format_mcp_server_detail(server_name, servers[server_name], statuses.get(server_name, {})),
+            }
+        if action == "tools":
+            return {
+                "mode": "local",
+                "content": _format_mcp_server_tools(server_name, statuses.get(server_name, {})),
+            }
+        if action == "reconnect":
+            return {"mode": "local", "content": await _reconnect_mcp_server(tool_context, server_name)}
+        if action == "disable":
+            return {"mode": "local", "content": _disable_mcp_server(tool_context, server_name)}
+        if action == "enable":
+            return {"mode": "local", "content": await _enable_mcp_server(tool_context, server_name)}
+        return {
+            "mode": "local",
+            "content": (
+                f"Unknown MCP action: {action}\n"
+                f"Available actions: /mcp {server_name} tools, /mcp {server_name} reconnect, "
+                f"/mcp {server_name} disable"
+            ),
+        }
+
     async def _handle_memory_index(self, args: str, context: dict[str, object]) -> dict[str, object]:
         """内部处理该方法负责的业务逻辑。"""
         tool_context = context["tool_context"]
@@ -398,3 +451,227 @@ class UserInputProcessor:
             "mode": "prompt",
             "content": "Please refresh session memory and surface relevant durable memories for the current task.",
         }
+
+
+def _mcp_servers(tool_context: ToolUseContext) -> dict[str, dict[str, object]]:
+    servers = tool_context.app_state.get("mcp_servers") or {}
+    if not isinstance(servers, dict):
+        return {}
+    return {
+        str(name): dict(config)
+        for name, config in servers.items()
+        if isinstance(config, dict)
+    }
+
+
+def _mcp_statuses(tool_context: ToolUseContext) -> dict[str, dict[str, object]]:
+    statuses = tool_context.app_state.get("mcp_statuses") or {}
+    if not isinstance(statuses, dict):
+        return {}
+    return {
+        str(name): dict(status)
+        for name, status in statuses.items()
+        if isinstance(status, dict)
+    }
+
+
+def _format_mcp_server_list(
+    servers: dict[str, dict[str, object]],
+    statuses: dict[str, dict[str, object]],
+) -> str:
+    """渲染 Claude 风格的 MCP 总览列表。"""
+
+    lines = [
+        "Manage MCP servers",
+        _plural(len(servers), "server"),
+        "",
+    ]
+    if not servers:
+        lines.append("No MCP servers configured.")
+        return "\n".join(lines)
+
+    grouped: dict[str, list[str]] = {"user": [], "project": [], "other": []}
+    for name in sorted(servers):
+        config = servers[name]
+        scope = str(config.get("_scope") or "other")
+        status = statuses.get(name, {})
+        status_text = _status_text(status)
+        tool_count = _tool_count(status)
+        suffix = f" · {_plural(tool_count, 'tool')}" if tool_count else ""
+        if config.get("disabled") or status.get("status") == "disabled":
+            suffix = " · disabled"
+        grouped.setdefault(scope, []).append(f"- {name} · {status_text}{suffix}")
+
+    for scope, title in [
+        ("user", "User MCPs"),
+        ("project", "Project MCPs"),
+        ("other", "Other MCPs"),
+    ]:
+        rows = grouped.get(scope) or []
+        if not rows:
+            continue
+        config_path = _first_config_path(servers, scope)
+        header = f"{title} ({config_path})" if config_path else title
+        lines.append(header)
+        lines.extend(rows)
+        lines.append("")
+    lines.append("Use /mcp <server> to view details.")
+    return "\n".join(lines).rstrip()
+
+
+def _format_mcp_server_detail(
+    name: str,
+    config: dict[str, object],
+    status: dict[str, object],
+) -> str:
+    args = config.get("args") if isinstance(config.get("args"), list) else []
+    capabilities = status.get("capabilities")
+    if not isinstance(capabilities, list) or not capabilities:
+        capabilities = ["tools"] if _tool_count(status) else []
+    lines = [
+        f"{_title(name)} MCP Server",
+        "",
+        f"Status: {_status_text(status)}",
+        f"Command: {config.get('command') or ''}",
+        f"Args: {' '.join(str(arg) for arg in args)}",
+        f"Config location: {config.get('_config_path') or 'unknown'}",
+        f"Capabilities: {' · '.join(str(item) for item in capabilities) if capabilities else 'none'}",
+        f"Tools: {_plural(_tool_count(status), 'tool')}",
+    ]
+    if status.get("error"):
+        lines.append(f"Error: {status.get('error')}")
+    lines.extend(
+        [
+            "",
+            "Actions:",
+            f"- /mcp {name} tools",
+            f"- /mcp {name} reconnect",
+            f"- /mcp {name} disable",
+        ]
+    )
+    if config.get("disabled") or status.get("status") == "disabled":
+        lines.append(f"- /mcp {name} enable")
+    return "\n".join(lines)
+
+
+def _format_mcp_server_tools(name: str, status: dict[str, object]) -> str:
+    tools = status.get("tools")
+    if not isinstance(tools, list) or not tools:
+        return f"Tools for {name}\n\nNo tools are currently registered."
+    lines = [f"Tools for {name}", ""]
+    for index, tool in enumerate(tools, start=1):
+        if not isinstance(tool, dict):
+            continue
+        schema = tool.get("input_schema")
+        required = []
+        if isinstance(schema, dict) and isinstance(schema.get("required"), list):
+            required = [str(item) for item in schema["required"]]
+        lines.extend(
+            [
+                f"{index}. {tool.get('wrapped_name') or tool.get('name')}",
+                f"   Original name: {tool.get('name') or ''}",
+                f"   Description: {tool.get('description') or ''}",
+                f"   Required: {', '.join(required) if required else 'none'}",
+            ]
+        )
+    return "\n".join(lines)
+
+
+async def _reconnect_mcp_server(tool_context: ToolUseContext, name: str) -> str:
+    servers = _mcp_servers(tool_context)
+    config = servers[name]
+    if config.get("disabled"):
+        return f"MCP server {name} is disabled. Use /mcp {name} enable first."
+    registry = tool_context.app_state.get("tool_registry")
+    if not isinstance(registry, ToolRegistry):
+        return "MCP tool registry unavailable; restart Morty to reconnect."
+    statuses = _mcp_statuses(tool_context)
+    statuses[name] = {"status": "connecting"}
+    registry.remove_matching(lambda tool: tool.name.startswith(f"mcp__{name}__"))
+    mcp_registry = await create_mcp_tool_registry(
+        {name: _public_mcp_config(config)},
+        workspace_root=Path(str(tool_context.app_state.get("cwd") or ".")),
+        statuses=statuses,
+    )
+    tools = [
+        tool
+        for tool_name in mcp_registry.list_names()
+        if (tool := mcp_registry.find(tool_name)) is not None
+    ]
+    registry.extend(tools)
+    _refresh_mcp_runtime_tools(tool_context, registry, statuses)
+    status = statuses.get(name, {})
+    if status.get("status") == "connected":
+        return f"Reconnected MCP server {name}: {_plural(_tool_count(status), 'tool')} registered."
+    return f"Failed to reconnect MCP server {name}: {status.get('error') or status.get('status')}"
+
+
+def _disable_mcp_server(tool_context: ToolUseContext, name: str) -> str:
+    registry = tool_context.app_state.get("tool_registry")
+    workspace_root = Path(str(tool_context.app_state.get("cwd") or "."))
+    config_path = set_mcp_server_disabled(name=name, disabled=True, workspace_root=workspace_root)
+    if isinstance(registry, ToolRegistry):
+        registry.remove_matching(lambda tool: tool.name.startswith(f"mcp__{name}__"))
+        tool_context.tools = registry.list_names()
+        tool_context.app_state["tool_schemas"] = registry.api_tool_schemas()
+    servers = load_mcp_server_entries(workspace_root)
+    statuses = _mcp_statuses(tool_context)
+    statuses[name] = {"status": "disabled", "tools": []}
+    tool_context.app_state["mcp_servers"] = servers
+    tool_context.app_state["mcp_statuses"] = statuses
+    return f"Disabled MCP server {name}. Config updated: {config_path}"
+
+
+async def _enable_mcp_server(tool_context: ToolUseContext, name: str) -> str:
+    workspace_root = Path(str(tool_context.app_state.get("cwd") or "."))
+    config_path = set_mcp_server_disabled(name=name, disabled=False, workspace_root=workspace_root)
+    tool_context.app_state["mcp_servers"] = load_mcp_server_entries(workspace_root)
+    message = await _reconnect_mcp_server(tool_context, name)
+    return f"Enabled MCP server {name}. Config updated: {config_path}\n{message}"
+
+
+def _refresh_mcp_runtime_tools(
+    tool_context: ToolUseContext,
+    registry: ToolRegistry,
+    statuses: dict[str, dict[str, object]],
+) -> None:
+    tool_context.tools = registry.list_names()
+    tool_context.app_state["tool_schemas"] = registry.api_tool_schemas()
+    tool_context.app_state["mcp_statuses"] = statuses
+
+
+def _public_mcp_config(config: dict[str, object]) -> dict[str, object]:
+    return {
+        key: value
+        for key, value in config.items()
+        if not key.startswith("_")
+    }
+
+
+def _status_text(status: dict[str, object]) -> str:
+    return str(status.get("status") or "pending")
+
+
+def _tool_count(status: dict[str, object]) -> int:
+    tools = status.get("tools")
+    if isinstance(tools, list):
+        return len(tools)
+    if isinstance(tools, int):
+        return tools
+    return 0
+
+
+def _plural(count: int, singular: str) -> str:
+    suffix = "" if count == 1 else "s"
+    return f"{count} {singular}{suffix}"
+
+
+def _first_config_path(servers: dict[str, dict[str, object]], scope: str) -> str | None:
+    for config in servers.values():
+        if config.get("_scope") == scope and config.get("_config_path"):
+            return str(config["_config_path"])
+    return None
+
+
+def _title(name: str) -> str:
+    return " ".join(part.capitalize() for part in name.replace("-", "_").split("_") if part)
