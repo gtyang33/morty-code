@@ -6,6 +6,7 @@ from morty_code.prompt.prompt_builder import PromptBuilder
 from morty_code.prompt.prompt_sections import PromptSectionRegistry
 from morty_code.tools.builtin_tools import create_local_tool_registry
 from morty_code.tools.tool_registry import ToolRegistry, ToolSpec
+from morty_code.types.runtime_state import ContentReplacementState, ToolUseContext
 
 
 def test_system_prompt_prefers_structured_file_edit_tools(tmp_path) -> None:
@@ -71,3 +72,51 @@ def test_tool_schema_uses_model_prompt_without_changing_short_description() -> N
 
     assert registry.find("demo").description == "Short UI description."
     assert schemas[0]["function"]["description"] == "Long model-facing prompt with usage rules."
+
+
+def test_prompt_builder_filters_tool_schemas_to_current_allowed_tools() -> None:
+    async def handler(args: dict[str, object]) -> dict[str, object]:
+        return args
+
+    registry = ToolRegistry(
+        [
+            ToolSpec("read_file", "Read.", handler),
+            ToolSpec("write_file", "Write.", handler),
+        ]
+    )
+    context = ToolUseContext(
+        tools=["read_file"],
+        model="test-model",
+        permission_mode="default",
+        app_state={"tool_schemas": registry.api_tool_schemas()},
+        read_file_state={},
+        content_replacement_state=ContentReplacementState(),
+    )
+
+    _, _, system_context = asyncio.run(
+        PromptBuilder(PromptSectionRegistry()).build_for_context(context)
+    )
+
+    assert "read_file" in system_context["tool_schemas_json"]
+    assert "write_file" not in system_context["tool_schemas_json"]
+
+
+def test_prompt_builder_omits_tool_schemas_when_no_tools_are_allowed() -> None:
+    async def handler(args: dict[str, object]) -> dict[str, object]:
+        return args
+
+    registry = ToolRegistry([ToolSpec("write_file", "Write.", handler)])
+    context = ToolUseContext(
+        tools=[],
+        model="test-model",
+        permission_mode="default",
+        app_state={"tool_schemas": registry.api_tool_schemas()},
+        read_file_state={},
+        content_replacement_state=ContentReplacementState(),
+    )
+
+    _, _, system_context = asyncio.run(
+        PromptBuilder(PromptSectionRegistry()).build_for_context(context)
+    )
+
+    assert "tool_schemas_json" not in system_context

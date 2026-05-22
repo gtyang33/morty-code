@@ -41,6 +41,7 @@ from morty_code.mcp.config import add_mcp_server, load_mcp_server_entries, parse
 from morty_code.mcp.manager import create_mcp_tool_registry, merge_tool_registries
 from morty_code.memory.memory_extractor import MemoryExtractor
 from morty_code.memory.model_memory_extractor import ModelMemoryExtractor
+from morty_code.plan.approval_ui import build_plan_approval_request, pending_plan_approval
 from morty_code.agents.task_notifications import has_task_notifications
 from morty_code.agents.task_registry import get_subagent_task_registry
 from morty_code.prompt.prompt_builder import PromptBuilder
@@ -48,12 +49,14 @@ from morty_code.prompt.prompt_sections import PromptSectionRegistry
 from morty_code.runtime.query_engine import QueryEngine
 from morty_code.runtime.query_loop import QueryLoop
 from morty_code.security import load_permission_settings
-from morty_code.tools import NullToolRunner, ToolRunner, create_local_tool_registry
+from morty_code.security.permission_ui import build_permission_request
+from morty_code.tools import ToolRunner, create_local_tool_registry
 from morty_code.tools.tool_registry import ToolRegistry
 from morty_code.tools.tool_result_formatter import format_tool_result_summary
 from morty_code.transcript.transcript_store import TranscriptStore
 from morty_code.types.messages import Message
 from morty_code.types.runtime_state import ContentReplacementState, ToolUseContext
+from morty_code.ui import TerminalInteraction
 
 # ---------------------------------------------------------------------------
 # REPL 语法高亮 & 空闲动画
@@ -105,6 +108,7 @@ def _runtime_app_state(
     permission_mode: str,
     permission_settings,
     tool_registry,
+    decision_gate_mode: str | None = None,
 ) -> dict[str, object]:
     """内部执行核心流程。"""
     morty_dir = workspace_root / ".morty"
@@ -126,10 +130,20 @@ def _runtime_app_state(
         "permission_settings_sources": permission_settings.sources,
         "tool_schemas": tool_registry.api_tool_schemas() if tool_registry is not None else [],
         "mcp_servers": tool_registry_mcp_servers(tool_registry),
+        "decision_gate": _decision_gate_mode(decision_gate_mode),
         "enable_prompt_caching": os.environ.get("DISABLE_PROMPT_CACHING") != "1",
         "send_cache_control": os.environ.get("MORTY_SEND_CACHE_CONTROL") == "1",
         "prompt_cache_ttl": os.environ.get("MORTY_PROMPT_CACHE_TTL"),
     }
+
+
+def _decision_gate_mode(raw: str | None = None) -> str:
+    """读取复杂任务方案选择 gate 的开关。"""
+
+    value = (raw if raw is not None else os.environ.get("MORTY_DECISION_GATE", "auto")).strip().lower()
+    if value in {"off", "auto", "always"}:
+        return value
+    return "auto"
 
 
 def tool_registry_mcp_servers(tool_registry) -> dict[str, object]:
@@ -263,6 +277,11 @@ def main() -> None:
         choices=["acceptEdits", "bypassPermissions", "default", "dontAsk", "plan"],
         help="覆盖项目权限配置里的默认 permission mode",
     )
+    parser.add_argument(
+        "--decision-gate",
+        choices=["off", "auto", "always"],
+        help="复杂任务是否先生成多个方案供用户选择，优先级高于 MORTY_DECISION_GATE",
+    )
     args = parser.parse_args()
     # `--session` 是精确恢复某个 transcript；`-c` 是“恢复最近一次”。
     # 两者同时出现时无法判断用户真实意图，直接报错比猜测更安全。
@@ -313,11 +332,7 @@ def main() -> None:
     # Claude Code 的 MCP 连接不阻塞 REPL：启动时只放 pending，后台连接
     # 成功后再把 MCP tools 注入工具池。这里保留同一个 ToolRegistry 对象，
     # ToolRunner 后续能看到后台注册的新工具。
-    tool_registry = merge_tool_registries(local_tool_registry)
-    if mcp_configs and tool_registry is None:
-        tool_registry = ToolRegistry()
-    if not tool_registry.list_names():
-        tool_registry = tool_registry if mcp_configs else None
+    tool_registry = merge_tool_registries(local_tool_registry) or ToolRegistry()
     permission_settings = load_permission_settings(
         workspace_root,
         env_allow=_env_list("MORTY_ALLOW_TOOLS"),
@@ -326,7 +341,7 @@ def main() -> None:
         env_default_mode=args.permission_mode or os.environ.get("MORTY_PERMISSION_MODE"),
     )
     permission_mode = permission_settings.default_mode or "default"
-    tool_runner = ToolRunner(tool_registry) if tool_registry is not None else NullToolRunner()
+    tool_runner = ToolRunner(tool_registry)
     input_processor = UserInputProcessor(AttachmentManager())
     engine = QueryEngine(
         prompt_builder=PromptBuilder(PromptSectionRegistry()),
@@ -344,6 +359,7 @@ def main() -> None:
         permission_mode=permission_mode,
         permission_settings=permission_settings,
         tool_registry=tool_registry,
+        decision_gate_mode=args.decision_gate,
     )
     app_state["mcp_servers"] = mcp_configs
     app_state["mcp_statuses"] = mcp_statuses
@@ -420,6 +436,10 @@ def main() -> None:
         style=_MORTY_STYLE,
     )
     spinner = _Spinner()
+    tool_context.app_state["permission_request_handler"] = _make_cli_permission_request_handler(
+        session,
+        spinner,
+    )
     turn_lock = threading.Lock()
     stop_notification_pump = threading.Event()
     notification_thread = _start_task_notification_pump(
@@ -461,6 +481,13 @@ def main() -> None:
                     if message.uuid in printed_ids:
                         continue
                     _print_cli_message(message)
+                _run_plan_approval_interactive(
+                    engine,
+                    tool_context,
+                    session,
+                    spinner=spinner,
+                    turn_lock=turn_lock,
+                )
 
     finally:
         stop_notification_pump.set()
@@ -579,6 +606,102 @@ def _resolve_mcp_menu_choice(choice: str, server_names: list[str]) -> str:
     if index < 0 or index >= len(server_names):
         return choice
     return server_names[index]
+
+
+def _run_plan_approval_interactive(
+    engine: QueryEngine,
+    tool_context: ToolUseContext,
+    session: PromptSession[str],
+    *,
+    spinner: _Spinner,
+    turn_lock: threading.Lock,
+) -> None:
+    """展示计划审批菜单，并把用户选择回灌到主会话。"""
+
+    interaction = TerminalInteraction(session)
+    while pending_plan_approval(tool_context) is not None:
+        action = interaction.ask(build_plan_approval_request(tool_context)).value
+        if not action:
+            return
+        if action == "reject":
+            tool_context.app_state.pop("pending_plan_approval", None)
+            print(_mcp_box("Plan rejected", ["Pending plan cleared. Ask for a new plan when needed."]))
+            return
+        if action == "changes":
+            feedback = session.prompt("Change request › ").strip()
+            if not feedback:
+                continue
+            # 用户要求改计划时，旧计划不再处于“待批准”状态；继续保留
+            # plan mode，把修改意见交给模型生成下一版计划。
+            tool_context.app_state.pop("pending_plan_approval", None)
+            _submit_plan_approval_followup(
+                engine,
+                tool_context,
+                feedback,
+                spinner=spinner,
+                turn_lock=turn_lock,
+            )
+            continue
+        if action == "approve":
+            _submit_plan_approval_followup(
+                engine,
+                tool_context,
+                "批准，直接实现",
+                spinner=spinner,
+                turn_lock=turn_lock,
+            )
+            continue
+
+
+def _submit_plan_approval_followup(
+    engine: QueryEngine,
+    tool_context: ToolUseContext,
+    text: str,
+    *,
+    spinner: _Spinner,
+    turn_lock: threading.Lock,
+) -> None:
+    """把审批动作作为下一条用户输入提交给模型。"""
+
+    spinner.start("thinking")
+    try:
+        live_print, printed_ids = _make_live_printer(spinner=spinner)
+        with turn_lock:
+            messages = engine.submit_message_sync(
+                text,
+                tool_context,
+                on_new_messages=live_print,
+            )
+    finally:
+        spinner.stop()
+    for message in messages:
+        if message.uuid in printed_ids:
+            continue
+        _print_cli_message(message)
+
+
+def _make_cli_permission_request_handler(
+    session: PromptSession[str],
+    spinner: _Spinner,
+) -> Callable[[dict[str, object]], dict[str, object]]:
+    """创建 CLI 权限审批 handler，复用通用交互组件。"""
+
+    interaction = TerminalInteraction(session)
+
+    def _handler(request: dict[str, object]) -> dict[str, object]:
+        spinner.stop()
+        try:
+            result = interaction.ask(build_permission_request(request))
+        finally:
+            spinner.start("thinking")
+        if result.value == "allow":
+            return {"behavior": "allow"}
+        return {
+            "behavior": "deny",
+            "message": "Tool use denied by user.",
+        }
+
+    return _handler
 
 
 def _format_mcp_interactive_list(

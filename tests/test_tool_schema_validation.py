@@ -124,3 +124,32 @@ def test_tool_runner_executes_when_schema_is_valid() -> None:
     tool_result = result_messages[0].payload["content"][0]
     assert tool_result["is_error"] is False
     assert tool_result["content"] == {"count": 3}
+
+
+def test_tool_runner_recovers_json_raw_arguments_before_validation() -> None:
+    async def handler(args: dict[str, object]) -> dict[str, object]:
+        return {"name": args["name"], "count": args["count"]}
+
+    registry = ToolRegistry(
+        [ToolSpec(name="demo", description="demo", handler=handler, input_schema=DEMO_SCHEMA)]
+    )
+    context = make_context()
+
+    result_messages = asyncio.run(
+        ToolRunner(registry).run(
+            make_message(
+                {
+                    "raw_arguments": (
+                        '{"name": "ok", "count": 3, "mode": "fast", '
+                        '"items": [{"id": "a"}]}'
+                    )
+                }
+            ),
+            context,
+            make_cache(),
+        )
+    )
+
+    tool_result = result_messages[0].payload["content"][0]
+    assert tool_result["is_error"] is False
+    assert tool_result["content"] == {"name": "ok", "count": 3}

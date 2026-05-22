@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from inspect import isawaitable
 from uuid import uuid4
@@ -73,7 +74,7 @@ class ToolRunner:
                     )
                 )
                 continue
-            tool_input = dict(tool_use.get("input") or {})
+            tool_input = self._normalize_tool_input(dict(tool_use.get("input") or {}))
             try:
                 # schema 校验必须早于权限请求，否则用户可能被要求批准一个
                 # 后续一定会失败的工具调用。
@@ -266,6 +267,22 @@ class ToolRunner:
             for block in content
             if isinstance(block, dict) and block.get("type") == "tool_use"
         ]
+
+    def _normalize_tool_input(self, tool_input: dict[str, object]) -> dict[str, object]:
+        """兼容 provider 把 function.arguments 包进 raw_arguments 的情况。"""
+
+        if set(tool_input) != {"raw_arguments"}:
+            return tool_input
+        raw_arguments = tool_input.get("raw_arguments")
+        if not isinstance(raw_arguments, str):
+            return tool_input
+        try:
+            parsed = json.loads(raw_arguments)
+        except json.JSONDecodeError:
+            return tool_input
+        if not isinstance(parsed, dict):
+            return tool_input
+        return dict(parsed)
 
     def _tool_result(
         self,

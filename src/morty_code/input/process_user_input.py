@@ -66,6 +66,25 @@ class UserInputProcessor:
                 )
             return processed
 
+        if _is_plan_approval_input(text, context):
+            exit_result = _exit_plan_mode(context)
+            user_message = Message(
+                uuid=command.uuid or str(uuid4()),
+                timestamp=datetime.utcnow().isoformat(),
+                type="user",
+                payload={
+                    "content": (
+                        f"Plan approved. Restored permission mode: {exit_result['restore_mode']}. "
+                        "Continue with implementation now.\n\n"
+                        f"User request: {text.strip()}"
+                    ),
+                    "mode": command.mode,
+                },
+                is_meta=command.is_meta,
+                origin=command.origin,
+            )
+            return ProcessedUserInput(messages=[user_message], should_query=True)
+
         attachments = []
         if text and not skip_attachments:
             attachments = await self.attachment_manager.collect_initial(
@@ -286,6 +305,9 @@ class UserInputProcessor:
                     f"prompt_cache_creation_tokens: {tool_context.prompt_cache_state.cache_creation_input_tokens}",
                     f"plan_mode: {bool(tool_context.app_state.get('plan_mode', False))}",
                     f"plan_file_path: {tool_context.app_state.get('plan_file_path', 'none')}",
+                    f"pending_plan_approval: {_pending_plan_approval_status(tool_context.app_state)}",
+                    f"decision_gate: {tool_context.app_state.get('decision_gate', 'auto')}",
+                    f"decision_gate_pending: {_decision_gate_pending_status(tool_context.app_state)}",
                     f"session_memory_path: {tool_context.session_memory_path or 'none'}",
                     f"durable_memory_dir: {tool_context.durable_memory_dir or 'none'}",
                     f"transcript_path: {tool_context.app_state.get('transcript_path', 'unknown')}",
@@ -420,23 +442,12 @@ class UserInputProcessor:
         tool_context = context["tool_context"]
         if not isinstance(tool_context, ToolUseContext):
             return {"mode": "local", "content": "Tool context unavailable."}
-        was_plan_mode = bool(tool_context.app_state.get("plan_mode", False))
-        plan_saved = False
-        if was_plan_mode:
-            plan_store = PlanStore.from_app_state(tool_context.app_state)
-            plan = plan_store.read().strip()
-            plan_saved = bool(plan)
-            tool_context.app_state["approved_plan"] = plan
-            tool_context.app_state["plan_file_path"] = str(plan_store.path)
-        restore_mode = str(tool_context.app_state.get("pre_plan_mode") or "default")
-        tool_context.permission_mode = restore_mode
-        tool_context.app_state["permission_mode"] = restore_mode
-        tool_context.app_state["pre_plan_mode"] = None
-        tool_context.app_state["plan_mode"] = False
-        if was_plan_mode:
-            tool_context.app_state["needs_plan_mode_exit_attachment"] = True
-        saved_suffix = "" if plan_saved else " No plan file was saved."
-        return {"mode": "local", "content": f"Plan approved. Restored permission mode: {restore_mode}.{saved_suffix}"}
+        exit_result = _exit_plan_mode(tool_context)
+        saved_suffix = "" if exit_result["plan_saved"] else " No plan file was saved."
+        return {
+            "mode": "local",
+            "content": f"Plan approved. Restored permission mode: {exit_result['restore_mode']}.{saved_suffix}",
+        }
 
     async def _handle_compact(self, args: str, context: dict[str, object]) -> dict[str, object]:
         """内部处理该方法负责的业务逻辑。"""
@@ -462,6 +473,80 @@ def _mcp_servers(tool_context: ToolUseContext) -> dict[str, dict[str, object]]:
         for name, config in servers.items()
         if isinstance(config, dict)
     }
+
+
+def _is_plan_approval_input(text: str, tool_context: ToolUseContext) -> bool:
+    """识别用户用自然语言批准计划并要求开始实现。"""
+
+    if not bool(tool_context.app_state.get("plan_mode", False)):
+        return False
+    normalized = text.strip().lower()
+    if not normalized:
+        return False
+    strong_markers = {
+        "批准",
+        "同意",
+        "可以",
+        "ok",
+        "okay",
+        "yes",
+        "直接实现",
+        "开始实现",
+        "按计划实现",
+        "按这个实现",
+        "照着实现",
+        "go on",
+        "continue",
+    }
+    if any(marker in normalized for marker in strong_markers):
+        return True
+    # “继续”在中文对话里可能只是继续说明；只有已有 plan 文件时才把它视为批准。
+    if "继续" in normalized:
+        return PlanStore.from_app_state(tool_context.app_state).has_plan()
+    return False
+
+
+def _exit_plan_mode(tool_context: ToolUseContext) -> dict[str, object]:
+    """退出 plan mode 并记录被批准的计划内容。"""
+
+    was_plan_mode = bool(tool_context.app_state.get("plan_mode", False))
+    plan_saved = False
+    if was_plan_mode:
+        plan_store = PlanStore.from_app_state(tool_context.app_state)
+        plan = plan_store.read().strip()
+        pending_plan = tool_context.app_state.get("pending_plan_approval")
+        if not plan and isinstance(pending_plan, dict):
+            plan = str(pending_plan.get("plan") or "").strip()
+        plan_saved = bool(plan)
+        tool_context.app_state["approved_plan"] = plan
+        tool_context.app_state["plan_file_path"] = str(plan_store.path)
+        tool_context.app_state.pop("pending_plan_approval", None)
+    restore_mode = str(tool_context.app_state.get("pre_plan_mode") or "default")
+    tool_context.permission_mode = restore_mode
+    tool_context.app_state["permission_mode"] = restore_mode
+    tool_context.app_state["pre_plan_mode"] = None
+    tool_context.app_state["plan_mode"] = False
+    if was_plan_mode:
+        tool_context.app_state["needs_plan_mode_exit_attachment"] = True
+    return {
+        "was_plan_mode": was_plan_mode,
+        "plan_saved": plan_saved,
+        "restore_mode": restore_mode,
+    }
+
+
+def _decision_gate_pending_status(app_state: dict[str, object]) -> str:
+    pending = app_state.get("decision_gate_pending")
+    if isinstance(pending, dict):
+        return str(pending.get("status") or "pending")
+    return "none"
+
+
+def _pending_plan_approval_status(app_state: dict[str, object]) -> str:
+    pending = app_state.get("pending_plan_approval")
+    if isinstance(pending, dict):
+        return str(pending.get("status") or "pending")
+    return "none"
 
 
 def _mcp_statuses(tool_context: ToolUseContext) -> dict[str, dict[str, object]]:

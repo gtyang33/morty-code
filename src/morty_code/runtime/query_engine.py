@@ -158,6 +158,16 @@ class QueryEngine:
         self.messages.extend(new_messages)
         if new_messages:
             await self.transcript_store.append_messages(new_messages)
+        decision_scoped_tools = self._maybe_apply_decision_gate(
+            raw_input=raw_input,
+            tool_context=tool_context,
+            should_query=should_query,
+        )
+        if decision_scoped_tools is not None:
+            scoped_tools = decision_scoped_tools
+            # decision gate 注入的 meta 指令同样要进入 transcript；否则恢复
+            # session 后模型看不到上一轮为什么只给方案。
+            await self.transcript_store.append_messages([self.messages[-1]])
         if should_compact:
             # 手动 compact 是本地状态迁移，不需要再请求模型普通回答；成功后
             # 直接返回 compact 产生的 summary/reinjection 消息。
@@ -248,6 +258,51 @@ class QueryEngine:
             }
         )
         return result.new_messages
+
+    def _maybe_apply_decision_gate(
+        self,
+        *,
+        raw_input: str,
+        tool_context: ToolUseContext,
+        should_query: bool,
+    ) -> list[str] | None:
+        """复杂任务先让模型给方案，等用户选择后再恢复工具执行。"""
+
+        if not should_query or not raw_input.strip() or raw_input.lstrip().startswith("/"):
+            return None
+        mode = str(tool_context.app_state.get("decision_gate") or "auto")
+        if mode == "off":
+            return None
+        if "enter_plan_mode" in tool_context.tools:
+            return None
+        pending = tool_context.app_state.get("decision_gate_pending")
+        if isinstance(pending, dict):
+            if _looks_like_decision_choice(raw_input):
+                tool_context.app_state.pop("decision_gate_pending", None)
+            return None
+        if mode != "always" and not _looks_like_complex_request(raw_input):
+            return None
+        instruction = Message(
+            uuid=str(uuid4()),
+            timestamp=datetime.utcnow().isoformat(),
+            type="user",
+            payload={
+                "content": (
+                    "当前用户请求可能存在多种实现方案。不要调用任何工具，不要修改文件，"
+                    "不要运行有副作用工具。"
+                    "请先给出 2-3 个可选方案，每个方案说明改动范围、优点、风险和推荐程度。"
+                    "最后明确询问用户选择哪个方案；在用户选择前不要开始实现。"
+                )
+            },
+            is_meta=True,
+            origin={"source": "decision_gate"},
+        )
+        self.messages.append(instruction)
+        tool_context.app_state["decision_gate_pending"] = {
+            "status": "awaiting_choice",
+            "request": raw_input,
+        }
+        return []
 
     def submit_message_sync(
         self,
@@ -458,3 +513,49 @@ class QueryEngine:
             },
             is_meta=True,
         )
+
+
+def _looks_like_decision_choice(text: str) -> bool:
+    """判断用户是否已经在选择方案。"""
+
+    normalized = text.strip().lower()
+    if not normalized:
+        return False
+    choice_markers = [
+        "选",
+        "方案",
+        "推荐",
+        "按你说的",
+        "直接实现",
+        "go on",
+        "continue",
+    ]
+    return any(marker in normalized for marker in choice_markers)
+
+
+def _looks_like_complex_request(text: str) -> bool:
+    """轻量规则：命中架构/复杂改造类意图时先进入方案选择。"""
+
+    normalized = text.strip().lower()
+    complex_markers = [
+        "实现",
+        "完善",
+        "优化",
+        "重构",
+        "改造",
+        "设计",
+        "方案",
+        "生产级",
+        "更优雅",
+        "一步到位",
+        "支持",
+        "交互",
+        "架构",
+        "runtime",
+        "agent",
+        "mcp",
+        "compact",
+        "permission",
+        "tool",
+    ]
+    return any(marker in normalized for marker in complex_markers)

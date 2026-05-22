@@ -77,6 +77,7 @@ class AttachmentManager:
                     ),
                     "plan_file_path": str(plan_path),
                     "plan": plan_store.read().strip(),
+                    **self._pending_plan_payload(context),
                 },
                 is_meta=True,
                 phase="input",
@@ -183,6 +184,7 @@ class AttachmentManager:
                         "plan_file_path": str(plan_path),
                         "plan": plan_store.read().strip(),
                         "source": "post_compact_reinject",
+                        **self._pending_plan_payload(context),
                     },
                     is_meta=True,
                     phase="reinjection",
@@ -378,12 +380,24 @@ class AttachmentManager:
                     "plan_file_path": str(plan_path),
                     "plan": plan_store.read().strip(),
                     "turn_index": turn_index,
+                    **self._pending_plan_payload(context),
                 },
                 is_meta=True,
                 phase="delta",
                 stable_key="delta:plan_mode",
             )
         ]
+
+    def _pending_plan_payload(self, context: ToolUseContext) -> dict[str, object]:
+        """把等待用户批准的计划状态注入模型上下文。"""
+
+        pending = context.app_state.get("pending_plan_approval")
+        if not isinstance(pending, dict):
+            return {}
+        return {
+            "pending_plan_status": str(pending.get("status") or "pending"),
+            "pending_plan": str(pending.get("plan") or ""),
+        }
 
     def _build_plan_mode_exit_attachment(
         self,

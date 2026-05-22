@@ -101,8 +101,27 @@ class PromptBuilder:
         if tool_schemas:
             import json
 
-            system_context["tool_schemas_json"] = json.dumps(
-                tool_schemas,
-                ensure_ascii=False,
-            )
+            allowed_tools = set(context.tools)
+            filtered_tool_schemas = [
+                schema
+                for schema in tool_schemas
+                if _schema_tool_name(schema) in allowed_tools
+            ]
+            if filtered_tool_schemas:
+                system_context["tool_schemas_json"] = json.dumps(
+                    filtered_tool_schemas,
+                    ensure_ascii=False,
+                )
         return system_prompt, user_context, system_context
+
+
+def _schema_tool_name(schema: object) -> str | None:
+    """从 OpenAI-compatible tool schema 中取函数名，用于当前工具集过滤。"""
+
+    if not isinstance(schema, dict):
+        return None
+    function = schema.get("function")
+    if not isinstance(function, dict):
+        return None
+    name = function.get("name")
+    return str(name) if name is not None else None
