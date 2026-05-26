@@ -17,6 +17,7 @@ class SessionRestore:
         read_file_state: dict[str, FileViewState] = {}
         content_replacement_state = ContentReplacementState()
         plan_state: dict[str, object] = {}
+        invoked_skills: dict[str, dict[str, object]] = {}
         for message in messages:
             if message.type != "attachment":
                 if message.type == "user":
@@ -47,6 +48,23 @@ class SessionRestore:
                 approved_plan = message.payload.get("approved_plan") or message.payload.get("content")
                 if approved_plan:
                     plan_state["approved_plan"] = str(approved_plan)
+            if message.payload.get("attachment_type") == "invoked_skills":
+                # Claude Code 会在 compact/resume 后恢复已调用 skill 的全文；
+                # 否则下一次 compact 会丢掉模型已经依赖的 skill 指令。
+                skills = message.payload.get("skills")
+                if isinstance(skills, list):
+                    for skill in skills:
+                        if not isinstance(skill, dict):
+                            continue
+                        name = str(skill.get("name") or "").strip()
+                        content = str(skill.get("content") or "")
+                        if not name or not content:
+                            continue
+                        invoked_skills[name] = {
+                            "name": name,
+                            "path": str(skill.get("path") or ""),
+                            "content": content,
+                        }
         return {
             "messages": messages,
             "metadata": metadata,
@@ -59,6 +77,7 @@ class SessionRestore:
                     "session_id": metadata.get("session_id", "default"),
                     "transcript_path": metadata.get("transcript_path", ""),
                     "plans_dir": metadata.get("plans_dir", ".morty/plans"),
+                    "invoked_skills": invoked_skills,
                     **plan_state,
                 },
                 read_file_state=read_file_state,

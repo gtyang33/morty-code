@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
+from pathlib import Path
 
 import pytest
 
@@ -110,3 +111,108 @@ def test_openai_compatible_streaming_accumulates_tool_call_arguments(monkeypatch
             "input": {"command": "git status"},
         }
     ]
+
+
+def test_openai_compatible_debug_model_io_writes_request_and_response(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    debug_dir = tmp_path / "model-io"
+    monkeypatch.setenv("MORTY_DEBUG_MODEL_IO", "1")
+    monkeypatch.setenv("MORTY_DEBUG_MODEL_IO_DIR", str(debug_dir))
+
+    def fake_urlopen(_request, timeout):
+        return _StreamingResponse(
+            [
+                'data: {"choices":[{"delta":{"content":"debug ok"}}],"usage":{"total_tokens":7}}\n',
+                "data: [DONE]\n",
+            ]
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = OpenAICompatibleModelClient(
+        model="test",
+        base_url="https://example.test/v1",
+        api_key="key",
+        timeout=12,
+    )
+
+    message = asyncio.run(
+        client.respond(
+            [{"role": "user", "content": "hello"}],
+            ["base system"],
+            {},
+            {"available_skills": "- reviewer: Review code changes"},
+        )
+    )
+
+    log_files = list(debug_dir.glob("*.jsonl"))
+    assert len(log_files) == 1
+    events = [
+        json.loads(line)
+        for line in log_files[0].read_text(encoding="utf-8").splitlines()
+    ]
+    assert [event["type"] for event in events] == ["request", "response"]
+    assert events[0]["body"]["messages"][0]["role"] == "system"
+    assert "available_skills" in events[0]["body"]["messages"][0]["content"]
+    assert events[1]["payload"]["choices"][0]["message"]["content"] == "debug ok"
+    assert events[1]["message"]["payload"] == message.payload
+
+
+def test_openai_compatible_debug_model_io_defaults_to_workspace_morty_dir(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("MORTY_DEBUG_MODEL_IO", "1")
+    monkeypatch.delenv("MORTY_DEBUG_MODEL_IO_DIR", raising=False)
+    workspace = tmp_path / "workspace"
+
+    def fake_urlopen(_request, timeout):
+        return _StreamingResponse(
+            [
+                'data: {"choices":[{"delta":{"content":"workspace debug"}}]}\n',
+                "data: [DONE]\n",
+            ]
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = OpenAICompatibleModelClient(
+        model="test",
+        base_url="https://example.test/v1",
+        api_key="key",
+        timeout=12,
+    )
+
+    asyncio.run(client.respond([], [], {}, {"cwd": str(workspace)}))
+
+    assert len(list((workspace / ".morty" / "model-io").glob("*.jsonl"))) == 1
+
+
+def test_openai_compatible_debug_model_io_uses_constructor_workspace_fallback(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("MORTY_DEBUG_MODEL_IO", "1")
+    monkeypatch.delenv("MORTY_DEBUG_MODEL_IO_DIR", raising=False)
+    workspace = tmp_path / "workspace"
+
+    def fake_urlopen(_request, timeout):
+        return _StreamingResponse(
+            [
+                'data: {"choices":[{"delta":{"content":"fallback debug"}}]}\n',
+                "data: [DONE]\n",
+            ]
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = OpenAICompatibleModelClient(
+        model="test",
+        base_url="https://example.test/v1",
+        api_key="key",
+        timeout=12,
+        debug_workspace=workspace,
+    )
+
+    asyncio.run(client.respond([], [], {}, {}))
+
+    assert len(list((workspace / ".morty" / "model-io").glob("*.jsonl"))) == 1

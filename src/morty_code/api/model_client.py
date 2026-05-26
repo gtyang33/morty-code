@@ -6,6 +6,7 @@ import socket
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
@@ -72,11 +73,13 @@ class OpenAICompatibleModelClient:
         base_url: str | None = None,
         api_key: str | None = None,
         timeout: float | None = None,
+        debug_workspace: str | Path | None = None,
     ) -> None:
         """初始化对象状态。"""
         self.model = model
         self.base_url = (base_url or os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
+        self.debug_workspace = Path(debug_workspace) if debug_workspace is not None else None
         self.timeout = timeout if timeout is not None else _env_float(
             "MORTY_API_TIMEOUT",
             "OPENAI_TIMEOUT",
@@ -87,6 +90,8 @@ class OpenAICompatibleModelClient:
         self.send_cache_control = os.environ.get("MORTY_SEND_CACHE_CONTROL") == "1"
         # 默认启用 OpenAI-compatible SSE streaming；外部接口仍返回完整 Message。
         self.streaming = os.environ.get("MORTY_STREAMING", "1") != "0"
+        self.debug_model_io = os.environ.get("MORTY_DEBUG_MODEL_IO") == "1"
+        self.debug_model_io_path: Path | None = None
 
     async def respond(
         self,
@@ -112,6 +117,16 @@ class OpenAICompatibleModelClient:
             wire_messages=wire_messages,
             system_context=system_context,
             stream=self.streaming,
+        )
+        self._write_debug_model_io_event(
+            system_context,
+            {
+                "type": "request",
+                "timestamp": datetime.now(UTC).isoformat(),
+                "model": self.model,
+                "base_url": self.base_url,
+                "body": request_body,
+            }
         )
         body = json.dumps(
             request_body,
@@ -164,6 +179,23 @@ class OpenAICompatibleModelClient:
         # transcript 诊断和用户排查 token 膨胀问题。
         if isinstance(payload.get("usage"), dict):
             message.payload["usage"] = payload["usage"]
+        self._write_debug_model_io_event(
+            system_context,
+            {
+                "type": "response",
+                "timestamp": datetime.now(UTC).isoformat(),
+                "model": self.model,
+                "payload": payload,
+                "message": {
+                    "uuid": message.uuid,
+                    "timestamp": message.timestamp,
+                    "type": message.type,
+                    "payload": message.payload,
+                    "is_meta": message.is_meta,
+                    "origin": message.origin,
+                },
+            }
+        )
         return message
 
     def _build_request_body(
@@ -448,6 +480,35 @@ class OpenAICompatibleModelClient:
                 if key not in {"cache_control", "cache_reference"}
             }
         return value
+
+    def _make_debug_model_io_path(self, system_context: dict[str, str]) -> Path:
+        """为一次进程内模型 IO 调试创建稳定 JSONL 路径。"""
+
+        configured_dir = os.environ.get("MORTY_DEBUG_MODEL_IO_DIR")
+        if configured_dir:
+            debug_dir = Path(configured_dir)
+        else:
+            cwd = Path(str(system_context.get("cwd") or self.debug_workspace or "."))
+            debug_dir = cwd / ".morty" / "model-io"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        return debug_dir / f"model-io-{timestamp}-{os.getpid()}.jsonl"
+
+    def _write_debug_model_io_event(
+        self,
+        system_context: dict[str, str],
+        event: dict[str, object],
+    ) -> None:
+        """开启 debug 模式时追加记录真实发给模型和收到的内容。"""
+
+        if not self.debug_model_io:
+            return
+        if self.debug_model_io_path is None:
+            self.debug_model_io_path = self._make_debug_model_io_path(system_context)
+        # 调试文件可能包含完整 prompt 和敏感上下文，因此仅在显式环境变量开启时写入。
+        with self.debug_model_io_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, ensure_ascii=False, default=str))
+            handle.write("\n")
 
 
 def _parse_retry_after(value: str | None) -> float | None:

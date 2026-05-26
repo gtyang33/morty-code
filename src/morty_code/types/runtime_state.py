@@ -7,6 +7,11 @@ from typing import Any
 from morty_code.types.messages import Message
 
 
+_FORK_SHARED_APP_STATE_KEYS = {
+    "tool_registry",
+}
+
+
 @dataclass
 class CacheSafeParams:
     """主线程与子线程共享的 cache-critical 前缀。"""
@@ -86,7 +91,7 @@ def clone_tool_use_context_for_fork(
     避免 fork 多出来的 prompt 被误报为父线程 cache break。
     """
 
-    app_state = deepcopy(context.app_state)
+    app_state = _clone_app_state_for_fork(context.app_state)
     app_state["fork"] = {
         "label": fork_label,
         "isolated": True,
@@ -112,6 +117,20 @@ def clone_tool_use_context_for_fork(
         session_memory_path=context.session_memory_path,
         durable_memory_dir=context.durable_memory_dir,
     )
+
+
+def _clone_app_state_for_fork(app_state: dict[str, Any]) -> dict[str, Any]:
+    """克隆 fork 可变状态，同时保留运行时服务对象引用。"""
+
+    cloned: dict[str, Any] = {}
+    for key, value in app_state.items():
+        if key in _FORK_SHARED_APP_STATE_KEYS:
+            # tool_registry 内含 RLock，不能 deepcopy；它是线程安全的共享服务，
+            # fork 子代理只需要查 schema/工具定义，保留同一引用即可。
+            cloned[key] = value
+            continue
+        cloned[key] = deepcopy(value)
+    return cloned
 
 
 @dataclass

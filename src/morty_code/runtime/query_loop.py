@@ -22,6 +22,7 @@ from morty_code.agents.subagent_tool import register_subagent_tool
 from morty_code.agents.send_message_tool import register_send_message_tool
 from morty_code.agents.task_output_tool import register_task_output_tool
 from morty_code.plan import register_enter_plan_mode_tool
+from morty_code.skills import register_skill_tool
 from morty_code.tools.tool_result_budget import DEFAULT_MESSAGE_BUDGET_CHARS, apply_tool_result_budget
 from morty_code.transcript.message_normalizer import MessageNormalizer
 from morty_code.types.messages import Message
@@ -57,6 +58,7 @@ class QueryLoop:
         registry = getattr(tool_runner, "registry", None)
         if registry is not None:
             register_enter_plan_mode_tool(registry)
+            register_skill_tool(registry, query_loop=self)
             register_subagent_tool(self, registry)
             register_send_message_tool(registry)
             register_task_output_tool(registry)

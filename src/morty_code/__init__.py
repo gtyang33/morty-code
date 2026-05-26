@@ -50,6 +50,7 @@ from morty_code.runtime.query_engine import QueryEngine
 from morty_code.runtime.query_loop import QueryLoop
 from morty_code.security import load_permission_settings
 from morty_code.security.permission_ui import build_permission_request
+from morty_code.skills import load_skill_registry
 from morty_code.tools import ToolRunner, create_local_tool_registry
 from morty_code.tools.tool_registry import ToolRegistry
 from morty_code.tools.tool_result_formatter import format_tool_result_summary
@@ -320,6 +321,7 @@ def main() -> None:
             model=args.model,
             base_url=args.base_url,
             timeout=args.api_timeout,
+            debug_workspace=workspace_root,
         )
         if args.provider == "openai-compatible"
         else EchoModelClient()
@@ -364,6 +366,7 @@ def main() -> None:
     app_state["mcp_servers"] = mcp_configs
     app_state["mcp_statuses"] = mcp_statuses
     app_state["tool_registry"] = tool_registry
+    app_state["skill_registry"] = load_skill_registry(workspace_root)
     tool_context = ToolUseContext(
         tools=tool_registry.list_names() if tool_registry is not None else [],
         model=args.model,

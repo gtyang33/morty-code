@@ -12,6 +12,7 @@ from morty_code.memory.durable_memory import DurableMemoryStore
 from morty_code.mcp.config import load_mcp_server_entries, set_mcp_server_disabled
 from morty_code.mcp.manager import create_mcp_tool_registry
 from morty_code.plan import PlanStore
+from morty_code.skills import SkillRegistry, SkillSpec, load_skill_registry
 from morty_code.tools.tool_registry import ToolRegistry
 from morty_code.types.messages import Attachment, Message
 from morty_code.types.runtime_state import ProcessedUserInput, QueuedCommand, ToolUseContext
@@ -165,6 +166,14 @@ class UserInputProcessor:
                 description="显示当前允许的工具",
                 kind="local",
                 handler=self._handle_tools,
+            )
+        )
+        registry.register(
+            CommandSpec(
+                name="skills",
+                description="显示可用 skills",
+                kind="local",
+                handler=self._handle_skills,
             )
         )
         registry.register(
@@ -339,6 +348,21 @@ class UserInputProcessor:
             ),
         }
 
+    async def _handle_skills(self, args: str, context: dict[str, object]) -> dict[str, object]:
+        """显示当前加载的 skills；这是本地查询命令，不触发模型执行。"""
+
+        tool_context = context["tool_context"]
+        if not isinstance(tool_context, ToolUseContext):
+            return {"mode": "local", "content": "Skill context unavailable."}
+        registry = tool_context.app_state.get("skill_registry")
+        if not isinstance(registry, SkillRegistry):
+            registry = load_skill_registry(str(tool_context.app_state.get("cwd") or "."))
+            tool_context.app_state["skill_registry"] = registry
+        return {
+            "mode": "local",
+            "content": _format_skills_list(registry, tool_context),
+        }
+
     async def _handle_mcp(self, args: str, context: dict[str, object]) -> dict[str, object]:
         """显示和管理 MCP server，交互菜单和脚本化子命令共享这个入口。"""
 
@@ -473,6 +497,60 @@ def _mcp_servers(tool_context: ToolUseContext) -> dict[str, dict[str, object]]:
         for name, config in servers.items()
         if isinstance(config, dict)
     }
+
+
+def _format_skills_list(registry: SkillRegistry, tool_context: ToolUseContext) -> str:
+    """按 Claude /skills 的思路，把 skill 作为本地清单分组展示。"""
+
+    skills = registry.list_all()
+    if not skills:
+        cwd = Path(str(tool_context.app_state.get("cwd") or "."))
+        return "\n".join(
+            [
+                "Skills",
+                "No skills found.",
+                "",
+                "Create skills in:",
+                f"- {cwd / '.morty' / 'skills' / '<skill-name>' / 'SKILL.md'}",
+                "- ~/.morty/skills/<skill-name>/SKILL.md",
+                "- .claude/skills/<skill-name>/SKILL.md",
+            ]
+        )
+
+    grouped: dict[str, list[SkillSpec]] = {
+        "Project skills": [],
+        "User skills": [],
+    }
+    cwd = Path(str(tool_context.app_state.get("cwd") or ".")).resolve()
+    for skill in skills:
+        try:
+            skill.source_path.resolve().relative_to(cwd)
+            grouped["Project skills"].append(skill)
+        except ValueError:
+            grouped["User skills"].append(skill)
+
+    lines = [
+        "Skills",
+        f"{len(skills)} {'skill' if len(skills) == 1 else 'skills'}",
+        "",
+    ]
+    for title in ("Project skills", "User skills"):
+        group = grouped[title]
+        if not group:
+            continue
+        lines.append(title)
+        for skill in sorted(group, key=lambda item: item.name):
+            flags: list[str] = []
+            if not skill.model_invocable:
+                flags.append("manual only")
+            if skill.context == "fork":
+                flags.append("fork")
+            suffix = f" [{' · '.join(flags)}]" if flags else ""
+            description = skill.description.strip() or "(no description)"
+            lines.append(f"- {skill.name}: {description}{suffix}")
+            lines.append(f"  path: {skill.source_path}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
 def _is_plan_approval_input(text: str, tool_context: ToolUseContext) -> bool:

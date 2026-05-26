@@ -78,6 +78,26 @@ def test_spawn_agent_returns_clean_output_file_without_transcript_path(tmp_path:
     assert "metadata_events" not in result
 
 
+def test_spawn_agent_handles_tool_registry_in_parent_app_state(tmp_path: Path) -> None:
+    registry = ToolRegistry([])
+    register_subagent_tool(FinalAnswerQueryLoop(), registry)
+    tool = registry.find("spawn_agent")
+    assert tool is not None
+    context = make_context(tmp_path)
+    context.app_state["tool_registry"] = registry
+
+    result = asyncio.run(
+        tool.handler(
+            {"prompt": "list files", "subagent_type": "Explore"},
+            context,
+            make_cache(),
+        )
+    )
+
+    assert result["status"] == "completed"
+    assert result["output"] == "clean subagent answer"
+
+
 def test_spawn_agent_prompt_tells_model_not_to_read_transcripts(tmp_path: Path) -> None:
     registry = ToolRegistry([])
     register_subagent_tool(FinalAnswerQueryLoop(), registry)

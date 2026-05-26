@@ -1,0 +1,52 @@
+skill 调用本质上是通过工具skill将skill加载进上下文中，首先注册skill工具，prompt如下
+export const getPrompt = memoize(async (_cwd: string): Promise<string> => {
+  return `Execute a skill within the main conversation
+
+When users ask you to perform tasks, check if any of the available skills match. Skills provide specialized capabilities and domain knowledge.
+
+When users reference a "slash command" or "/<something>" (e.g., "/commit", "/review-pr"), they are referring to a skill. Use this tool to invoke it.
+
+How to invoke:
+- Use this tool with the skill name and optional arguments
+- Examples:
+  - \`skill: "pdf"\` - invoke the pdf skill
+  - \`skill: "commit", args: "-m 'Fix bug'"\` - invoke with arguments
+  - \`skill: "review-pr", args: "123"\` - invoke with arguments
+  - \`skill: "ms-office-suite:pdf"\` - invoke using fully qualified name
+
+Important:
+- Available skills are listed in system-reminder messages in the conversation
+- When a skill matches the user's request, this is a BLOCKING REQUIREMENT: invoke the relevant Skill tool BEFORE generating any other response about the task
+- NEVER mention a skill without actually calling this tool
+- Do not invoke a skill that is already running
+- Do not use this tool for built-in CLI commands (like /help, /clear, etc.)
+- If you see a <${COMMAND_NAME_TAG}> tag in the current conversation turn, the skill has ALREADY been loaded - follow the instructions directly instead of calling this tool again
+`
+})
+工具输入：参数一是skill名字，参数二是skill的参数
+call 方法：
+    1.根据skill名字找到对应的command
+        getCommands(cwd: string)
+            loadAllCommands
+                getSkills从文件中读取skill加载
+                    loadSkillsFromSkillsDir
+                        createSkillCommand
+        getDynamicSkills
+    2.处理skill
+        processPromptSlashCommand
+            command.getPromptForCommand(args, context) 
+            -> 读取/展开 SKILL.md
+            -> 替换参数和变量
+            -> 执行 prompt shell 注入
+            -> 返回 text block
+    3.将skill信息放到message中，下次调用就能用到了
+将skills注册到prompt中：
+getSkillListingAttachments 
+    -> getSkillToolCommands
+        -> getSkills
+            从文件中读取skill加载
+            loadSkillsFromSkillsDir
+                createSkillCommand
+    formatCommandsWithinBudget：将skills注入上下文中
+        提取skill-name description - whentouse. 如果长度超过250，需要进行截断
+        

@@ -51,6 +51,7 @@ class ToolRunner:
         """执行核心流程。"""
         tool_uses = self._extract_tool_uses(assistant_message)
         results: list[dict[str, object]] = []
+        extra_messages: list[Message] = []
         for tool_use in tool_uses:
             name = str(tool_use.get("name", ""))
             tool_use_id = str(tool_use.get("id") or "")
@@ -176,7 +177,8 @@ class ToolRunner:
                     payload = await tool.handler(tool_input)
                 # 单个工具返回可能非常大，先在工具层做一次替换，后续 QueryLoop
                 # 还会按整轮 aggregate budget 做稳定替换。
-                content = self._maybe_replace_large_result(tool_use, payload, context)
+                content, payload_messages = self._extract_tool_payload_messages(payload)
+                content = self._maybe_replace_large_result(tool_use, content, context)
                 self._record_tool_event(
                     context,
                     {
@@ -187,6 +189,7 @@ class ToolRunner:
                     },
                 )
                 results.append(self._tool_result(tool_use, content=content, is_error=False))
+                extra_messages.extend(payload_messages)
             except Exception as exc:  # noqa: BLE001 - 工具异常必须进入 transcript，不能丢失。
                 self._record_tool_event(
                     context,
@@ -206,7 +209,7 @@ class ToolRunner:
                 )
         if not results:
             return []
-        return [
+        messages = [
             Message(
                 uuid=str(uuid4()),
                 timestamp=datetime.now(UTC).isoformat(),
@@ -215,6 +218,29 @@ class ToolRunner:
                 is_meta=True,
             )
         ]
+        messages.extend(extra_messages)
+        return messages
+
+    def _extract_tool_payload_messages(
+        self,
+        payload: object,
+    ) -> tuple[object, list[Message]]:
+        """解析工具返回的扩展消息。
+
+        普通工具仍把整个 payload 作为 tool_result；少数运行时工具（例如
+        skill）可以额外返回 meta user message，让下一轮模型看到展开后的指令。
+        """
+
+        if not isinstance(payload, dict):
+            return payload, []
+        if "__morty_tool_result_content__" not in payload:
+            return payload, []
+        content = payload.get("__morty_tool_result_content__", "")
+        raw_messages = payload.get("__morty_new_messages__", [])
+        messages = [
+            message for message in raw_messages if isinstance(message, Message)
+        ] if isinstance(raw_messages, list) else []
+        return content, messages
 
     async def _request_external_permission(
         self,

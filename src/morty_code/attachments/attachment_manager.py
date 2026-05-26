@@ -219,6 +219,36 @@ class AttachmentManager:
                     stable_key="reinjection:skill_discovery",
                 )
             )
+        invoked_skills = context.app_state.get("invoked_skills")
+        if isinstance(invoked_skills, dict) and invoked_skills:
+            skills: list[dict[str, object]] = []
+            for value in invoked_skills.values():
+                if not isinstance(value, dict):
+                    continue
+                name = str(value.get("name") or "").strip()
+                content = str(value.get("content") or "")
+                if not name or not content:
+                    continue
+                skills.append(
+                    {
+                        "name": name,
+                        "path": str(value.get("path") or ""),
+                        "content": content,
+                    }
+                )
+            if skills:
+                attachments.append(
+                    Attachment(
+                        type="invoked_skills",
+                        payload={
+                            "skills": sorted(skills, key=lambda item: str(item["name"])),
+                            "source": "post_compact_reinject",
+                        },
+                        is_meta=True,
+                        phase="reinjection",
+                        stable_key="reinjection:invoked_skills",
+                    )
+                )
         tool_schemas = context.app_state.get("tool_schemas")
         if tool_schemas:
             attachments.append(

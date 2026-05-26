@@ -5,6 +5,7 @@ from pathlib import Path
 
 from morty_code.memory.durable_memory import DurableMemoryStore
 from morty_code.prompt.prompt_sections import PromptSectionRegistry, SystemPromptSection
+from morty_code.skills import SkillRegistry
 from morty_code.types.runtime_state import ToolUseContext
 
 
@@ -47,6 +48,17 @@ class PromptBuilder:
             SystemPromptSection(
                 name="tools",
                 compute=lambda: f"可用工具: {', '.join(tools) if tools else '无'}",
+                cache_break=True,
+            ),
+            SystemPromptSection(
+                name="skills",
+                compute=lambda: (
+                    "Skills: 当用户任务匹配 available_skills 中的能力时，必须先调用 "
+                    "skill 工具加载对应 skill，再继续回答。不要只提到 skill 而不调用；"
+                    "看到已加载的 skill 指令后直接遵循，不要重复调用。"
+                    if "skill" in tools
+                    else ""
+                ),
                 cache_break=True,
             ),
             SystemPromptSection(
@@ -97,6 +109,11 @@ class PromptBuilder:
             system_context["discovered_skills"] = ", ".join(
                 sorted(context.discovered_skill_names)
             )
+        skill_registry = context.app_state.get("skill_registry")
+        if isinstance(skill_registry, SkillRegistry):
+            listing = skill_registry.render_listing()
+            if listing.strip():
+                system_context["available_skills"] = listing
         tool_schemas = context.app_state.get("tool_schemas")
         if tool_schemas:
             import json
