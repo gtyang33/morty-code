@@ -121,6 +121,7 @@ class QueryEngine:
         should_query = False
         should_compact = False
         scoped_tools: list[str] | None = None
+        input_image_metadata: list[dict[str, object]] = []
         index = 0
         while queued_commands:
             command = queued_commands.pop(0)
@@ -133,6 +134,7 @@ class QueryEngine:
                 skip_attachments=index > 0,
             )
             new_messages.extend(processed.messages)
+            input_image_metadata.extend(_input_image_metadata(processed.messages))
             if index == 0:
                 should_query = processed.should_query
             should_compact = should_compact or processed.trigger_compact
@@ -158,6 +160,13 @@ class QueryEngine:
         self.messages.extend(new_messages)
         if new_messages:
             await self.transcript_store.append_messages(new_messages)
+        if input_image_metadata:
+            await self.transcript_store.append_event(
+                {
+                    "type": "input-images-attached",
+                    "images": input_image_metadata,
+                }
+            )
         decision_scoped_tools = self._maybe_apply_decision_gate(
             raw_input=raw_input,
             tool_context=tool_context,
@@ -531,6 +540,35 @@ def _looks_like_decision_choice(text: str) -> bool:
         "continue",
     ]
     return any(marker in normalized for marker in choice_markers)
+
+
+def _input_image_metadata(messages: list[Message]) -> list[dict[str, object]]:
+    """提取本轮用户输入图片的轻量诊断信息。"""
+
+    images: list[dict[str, object]] = []
+    for message in messages:
+        if message.type != "user":
+            continue
+        content = message.payload.get("content")
+        if not isinstance(content, list):
+            continue
+        for index, block in enumerate(content, start=1):
+            if not isinstance(block, dict) or block.get("type") != "image":
+                continue
+            source = block.get("source")
+            media_type = "unknown"
+            data_length = 0
+            if isinstance(source, dict):
+                media_type = str(source.get("media_type") or source.get("mediaType") or "unknown")
+                data_length = len(str(source.get("data") or ""))
+            images.append(
+                {
+                    "index": index,
+                    "media_type": media_type,
+                    "base64_chars": data_length,
+                }
+            )
+    return images
 
 
 def _looks_like_complex_request(text: str) -> bool:

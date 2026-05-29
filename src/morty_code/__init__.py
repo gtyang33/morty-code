@@ -12,9 +12,12 @@ from pathlib import Path
 from typing import Callable
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.application import run_in_terminal
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.history import FileHistory
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.styles import Style
@@ -24,7 +27,10 @@ from morty_code.attachments.attachment_manager import AttachmentManager
 from morty_code.compact.auto_compact import AutoCompactDecider
 from morty_code.compact.compact_agent import CompactAgent
 from morty_code.input.commands import CommandRegistry
+from morty_code.input.clipboard_image import read_clipboard_image
+from morty_code.input.clipboard_text import ClipboardTextError, read_clipboard_text
 from morty_code.input.handle_input import InputDispatcher
+from morty_code.input.image_input import convert_inline_images
 from morty_code.input.process_user_input import (
     UserInputProcessor,
     _disable_mcp_server,
@@ -207,6 +213,82 @@ class _SlashCommandCompleter(Completer):
             )
 
 
+def _create_repl_key_bindings(
+    workspace_root: Path,
+    pasted_contents: dict[int, dict[str, object]],
+    next_paste_id: list[int],
+) -> KeyBindings:
+    """创建 REPL 粘贴快捷键。
+
+    这里只处理终端实际传进来的文本粘贴事件：图片路径、Markdown 图片、
+    data URL 会被转换成 `[Image #n]`。不尝试读取 GUI 剪贴板里的二进制图片。
+    """
+
+    key_bindings = KeyBindings()
+
+    @key_bindings.add(Keys.BracketedPaste)
+    def _paste_text_or_image_refs(event) -> None:
+        pasted_text = str(event.data or "")
+        _insert_pasted_text(
+            event,
+            pasted_text,
+            workspace_root=workspace_root,
+            pasted_contents=pasted_contents,
+            next_paste_id=next_paste_id,
+        )
+
+    @key_bindings.add("c-v", eager=True)
+    def _paste_from_system_clipboard(event) -> None:
+        image = read_clipboard_image()
+        if image is not None:
+            paste_id = next_paste_id[0]
+            next_paste_id[0] += 1
+            image["id"] = paste_id
+            pasted_contents[paste_id] = image
+            event.app.current_buffer.insert_text(f"[Image #{paste_id}]")
+            return
+        try:
+            pasted_text = read_clipboard_text()
+        except ClipboardTextError as exc:
+            message = str(exc)
+            run_in_terminal(lambda: print(f"[system] {message}"))
+            return
+        if not pasted_text:
+            return
+        _insert_pasted_text(
+            event,
+            pasted_text,
+            workspace_root=workspace_root,
+            pasted_contents=pasted_contents,
+            next_paste_id=next_paste_id,
+        )
+
+    return key_bindings
+
+
+def _insert_pasted_text(
+    event,
+    pasted_text: str,
+    *,
+    workspace_root: Path,
+    pasted_contents: dict[int, dict[str, object]],
+    next_paste_id: list[int],
+) -> None:
+    """把粘贴文本写入当前输入框，并转换其中的图片引用。"""
+
+    converted = convert_inline_images(
+        pasted_text,
+        cwd=workspace_root,
+        start_id=next_paste_id[0],
+    )
+    if converted is None:
+        event.app.current_buffer.insert_text(pasted_text)
+        return
+    pasted_contents.update(converted.pasted_contents)
+    next_paste_id[0] = converted.next_id
+    event.app.current_buffer.insert_text(converted.text)
+
+
 class _Spinner:
     """在 stderr 上显示旋转动画，用于模型响应等待期间。"""
 
@@ -347,7 +429,7 @@ def main() -> None:
     input_processor = UserInputProcessor(AttachmentManager())
     engine = QueryEngine(
         prompt_builder=PromptBuilder(PromptSectionRegistry()),
-        input_dispatcher=InputDispatcher(),
+        input_dispatcher=InputDispatcher(workspace_root),
         input_processor=input_processor,
         query_loop=QueryLoop(model_client, tool_runner),
         transcript_store=transcript_store,
@@ -432,10 +514,17 @@ def main() -> None:
     history_file = morty_dir / "repl_history"
     history_file.parent.mkdir(parents=True, exist_ok=True)
 
+    repl_pasted_contents: dict[int, dict[str, object]] = {}
+    repl_next_paste_id = [1]
     session: PromptSession[str] = PromptSession(
         history=FileHistory(str(history_file)),
         lexer=_ReplLexer(),
         completer=_SlashCommandCompleter(input_processor.command_registry),
+        key_bindings=_create_repl_key_bindings(
+            workspace_root,
+            repl_pasted_contents,
+            repl_next_paste_id,
+        ),
         style=_MORTY_STYLE,
     )
     spinner = _Spinner()
@@ -469,6 +558,8 @@ def main() -> None:
                 if raw == "/mcp":
                     _run_mcp_interactive_menu(engine, tool_context, session)
                     continue
+                turn_pasted_contents = dict(repl_pasted_contents)
+                repl_pasted_contents.clear()
                 spinner.start("thinking")
                 try:
                     live_print, printed_ids = _make_live_printer(spinner=spinner)
@@ -476,6 +567,7 @@ def main() -> None:
                         messages = engine.submit_message_sync(
                             raw,
                             tool_context,
+                            pasted_contents=turn_pasted_contents or None,
                             on_new_messages=live_print,
                         )
                 finally:

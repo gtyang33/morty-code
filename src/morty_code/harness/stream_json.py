@@ -2,12 +2,21 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import TextIO
+from dataclasses import dataclass
+from typing import Any, TextIO
 from uuid import uuid4
 
 from morty_code.harness.sdk_events import message_to_sdk_event, result_event
 from morty_code.security.permission_settings import SUPPORTED_PERMISSION_MODES
 from morty_code.types.runtime_state import ToolUseContext
+
+
+@dataclass(frozen=True)
+class StreamJsonUserEvent:
+    """stream-json 用户事件的归一化结果。"""
+
+    text: str
+    pasted_contents: dict[int, dict[str, object]] | None = None
 
 
 def run_stream_json_harness(
@@ -53,12 +62,19 @@ def run_stream_json_harness(
         if event.get("type") != "user":
             _write_event(output_stream, result_event(session_id=_session_id(tool_context), success=False, error=f"unsupported event type: {event.get('type')}"))
             continue
-        text = _extract_user_text(event)
-        if not text:
+        parsed_user = parse_stream_json_user_event(event)
+        if not parsed_user.text:
             _write_event(output_stream, result_event(session_id=_session_id(tool_context), success=False, error="user message content is empty"))
             continue
         try:
-            messages = engine.submit_message_sync(text, tool_context)
+            if parsed_user.pasted_contents is None:
+                messages = engine.submit_message_sync(parsed_user.text, tool_context)
+            else:
+                messages = engine.submit_message_sync(
+                    parsed_user.text,
+                    tool_context,
+                    pasted_contents=parsed_user.pasted_contents,
+                )
             for message in messages:
                 _write_event(output_stream, message_to_sdk_event(message, _session_id(tool_context)))
             _write_event(output_stream, result_event(session_id=_session_id(tool_context)))
@@ -192,6 +208,65 @@ def _request_tool_permission(
             "message": str(payload.get("message") or "permission denied by harness"),
         }
     return {"behavior": "deny", "message": "permission response stream closed"}
+
+
+def parse_stream_json_user_event(event: dict[str, Any]) -> StreamJsonUserEvent:
+    """解析 stream-json 用户事件，支持显式 text/image content blocks。"""
+
+    message = event.get("message")
+    if isinstance(message, dict):
+        content = message.get("content")
+        if isinstance(content, list):
+            return _parse_content_blocks(content)
+        text = _extract_user_text(event)
+        return StreamJsonUserEvent(text=text)
+    return StreamJsonUserEvent(text=_extract_user_text(event))
+
+
+def _parse_content_blocks(content: list[object]) -> StreamJsonUserEvent:
+    """把 content blocks 中的图片归一成 pasted_contents。"""
+
+    text_parts: list[str] = []
+    pasted_contents: dict[int, dict[str, object]] = {}
+    next_id = 1
+    for block in content:
+        if isinstance(block, str):
+            text_parts.append(block)
+            continue
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "text":
+            text_parts.append(str(block.get("text") or ""))
+            continue
+        if block.get("type") != "image":
+            continue
+        image = _image_block_to_pasted_content(block)
+        if image is None:
+            continue
+        image["id"] = next_id
+        pasted_contents[next_id] = image
+        text_parts.append(f"[Image #{next_id}]")
+        next_id += 1
+    return StreamJsonUserEvent(
+        text=" ".join(part for part in text_parts if part).strip(),
+        pasted_contents=pasted_contents or None,
+    )
+
+
+def _image_block_to_pasted_content(block: dict[str, object]) -> dict[str, object] | None:
+    """从 image content block 提取 base64 图片。"""
+
+    source = block.get("source")
+    if not isinstance(source, dict) or source.get("type") != "base64":
+        return None
+    data = str(source.get("data") or source.get("content") or "").strip()
+    if not data:
+        return None
+    return {
+        "type": "image",
+        "content": data,
+        "media_type": str(source.get("media_type") or source.get("mediaType") or "image/png"),
+    }
 
 
 def _extract_user_text(event: dict[str, object]) -> str:

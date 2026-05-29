@@ -440,14 +440,29 @@ class OpenAICompatibleModelClient:
                     parts.append(text_part)
             elif block.get("type") == "image":
                 source = block.get("source")
-                if isinstance(source, str) and source:
-                    image_part: dict[str, object] = {"type": "image_url", "image_url": {"url": source}}
-                    if self.send_cache_control and isinstance(block.get("cache_control"), dict):
-                        image_part["cache_control"] = block["cache_control"]
-                    parts.append(image_part)
+                image_url = self._openai_image_url(source)
+                if not image_url:
+                    continue
+                image_part: dict[str, object] = {"type": "image_url", "image_url": {"url": image_url}}
+                if self.send_cache_control and isinstance(block.get("cache_control"), dict):
+                    image_part["cache_control"] = block["cache_control"]
+                parts.append(image_part)
         if not parts:
             return [{"type": "text", "text": ""}]
         return parts
+
+    def _openai_image_url(self, source: object) -> str | None:
+        """把内部图片 source 转成 OpenAI Chat Completions 的 image_url。"""
+
+        if isinstance(source, str) and source:
+            return source
+        if not isinstance(source, dict) or source.get("type") != "base64":
+            return None
+        data = str(source.get("data") or "").strip()
+        if not data:
+            return None
+        media_type = str(source.get("media_type") or "image/png")
+        return f"data:{media_type};base64,{data}"
 
     def _render_system_message(
         self,

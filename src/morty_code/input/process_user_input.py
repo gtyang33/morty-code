@@ -132,11 +132,18 @@ class UserInputProcessor:
         for item in pasted_contents.values():
             if item.get("type") != "image":
                 continue
+            data = str(item.get("data") or item.get("content") or "")
+            if not data:
+                continue
+            media_type = str(item.get("media_type") or item.get("mediaType") or "image/png")
             blocks.append(
                 {
                     "type": "image",
-                    "source": item.get("source") or item.get("content") or item.get("data"),
-                    "media_type": item.get("media_type", "image/png"),
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": data,
+                    },
                 }
             )
         return blocks
